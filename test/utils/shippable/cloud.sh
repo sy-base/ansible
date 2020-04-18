@@ -1,6 +1,6 @@
-#!/bin/bash -eux
+#!/usr/bin/env bash
 
-set -o pipefail
+set -o pipefail -eux
 
 declare -a args
 IFS='/:' read -ra args <<< "$1"
@@ -15,14 +15,14 @@ stage="${S:-prod}"
 
 changed_all_target="shippable/${cloud}/smoketest/"
 
+if ! ansible-test integration "${changed_all_target}" --list-targets > /dev/null 2>&1; then
+    # no smoketest tests are available for this cloud
+    changed_all_target="none"
+fi
+
 if [ "${group}" == "1" ]; then
     # only run smoketest tests for group1
     changed_all_mode="include"
-
-    if ! ansible-test integration "${changed_all_target}" --list-targets > /dev/null 2>&1; then
-        # no smoketest tests are available for this cloud
-        changed_all_target="none"
-    fi
 else
     # smoketest tests already covered by group1
     changed_all_mode="exclude"

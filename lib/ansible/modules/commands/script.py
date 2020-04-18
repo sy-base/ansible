@@ -15,6 +15,7 @@ version_added: "0.9"
 short_description: Runs a local script on a remote node after transferring it
 description:
      - The C(script) module takes the script name followed by a list of space-delimited arguments.
+     - Either a free form command or C(cmd) parameter is required, see the examples.
      - The local script at path will be transferred to the remote node and then executed.
      - The given script will be processed through the shell environment on the remote node.
      - This module does not require python on the remote system, much like the M(raw) module.
@@ -23,8 +24,10 @@ options:
   free_form:
     description:
       - Path to the local script file followed by optional arguments.
-      - There is no parameter actually named 'free form', see the examples!
-    required: true
+  cmd:
+    type: str
+    description:
+      - Path to the local script to run followed by optional arguments.
   creates:
     description:
       - A filename on the remote node, when it already exists, this step will B(not) be run.
@@ -47,6 +50,9 @@ notes:
     stderr is sent to stdout. If you depend on separated stdout and stderr result keys, please switch to a copy+command set of tasks instead of using script.
   - If the path to the local script contains spaces, it needs to be quoted.
   - This module is also supported for Windows targets.
+seealso:
+- module: shell
+- module: win_shell
 author:
     - Ansible Core Team
     - Michael DeHaan
@@ -55,8 +61,12 @@ extends_documentation_fragment:
 '''
 
 EXAMPLES = r'''
-- name: Run a script with arguments
+- name: Run a script with arguments (free form)
   script: /some/local/script.sh --some-argument 1234
+
+- name: Run a script with arguments (using 'cmd' parameter)
+  script:
+    cmd: /some/local/script.sh --some-argument 1234
 
 - name: Run a script only if file.txt does not exist on the remote node
   script: /some/local/create_file.sh --some-argument 1234

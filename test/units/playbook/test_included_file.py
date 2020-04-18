@@ -31,6 +31,7 @@ from ansible.playbook.task_include import TaskInclude
 from ansible.executor import task_result
 
 from ansible.playbook.included_file import IncludedFile
+from ansible.errors import AnsibleParserError
 
 
 @pytest.fixture
@@ -51,11 +52,12 @@ def mock_variable_manager():
 def test_included_file_instantiation():
     filename = 'somefile.yml'
 
-    inc_file = IncludedFile(filename=filename, args=[], task=None)
+    inc_file = IncludedFile(filename=filename, args={}, vars={}, task=None)
 
     assert isinstance(inc_file, IncludedFile)
     assert inc_file._filename == filename
-    assert inc_file._args == []
+    assert inc_file._args == {}
+    assert inc_file._vars == {}
     assert inc_file._task is None
 
 
@@ -65,6 +67,7 @@ def test_process_include_results(mock_iterator, mock_variable_manager):
 
     parent_task_ds = {'debug': 'msg=foo'}
     parent_task = Task.load(parent_task_ds)
+    parent_task._play = None
 
     task_ds = {'include': 'include_test.yml'}
     loaded_task = TaskInclude.load(task_ds, task_include=parent_task)
@@ -83,6 +86,7 @@ def test_process_include_results(mock_iterator, mock_variable_manager):
     assert res[0]._filename == os.path.join(os.getcwd(), 'include_test.yml')
     assert res[0]._hosts == ['testhost1', 'testhost2']
     assert res[0]._args == {}
+    assert res[0]._vars == {}
 
 
 def test_process_include_diff_files(mock_iterator, mock_variable_manager):
@@ -91,12 +95,15 @@ def test_process_include_diff_files(mock_iterator, mock_variable_manager):
 
     parent_task_ds = {'debug': 'msg=foo'}
     parent_task = Task.load(parent_task_ds)
+    parent_task._play = None
 
     task_ds = {'include': 'include_test.yml'}
     loaded_task = TaskInclude.load(task_ds, task_include=parent_task)
+    loaded_task._play = None
 
     child_task_ds = {'include': 'other_include_test.yml'}
     loaded_child_task = TaskInclude.load(child_task_ds, task_include=loaded_task)
+    loaded_child_task._play = None
 
     return_data = {'include': 'include_test.yml'}
     # The task in the TaskResult has to be a TaskInclude so it has a .static attr
@@ -120,6 +127,9 @@ def test_process_include_diff_files(mock_iterator, mock_variable_manager):
     assert res[0]._args == {}
     assert res[1]._args == {}
 
+    assert res[0]._vars == {}
+    assert res[1]._vars == {}
+
 
 def test_process_include_simulate_free(mock_iterator, mock_variable_manager):
     hostname = "testhost1"
@@ -128,6 +138,9 @@ def test_process_include_simulate_free(mock_iterator, mock_variable_manager):
     parent_task_ds = {'debug': 'msg=foo'}
     parent_task1 = Task.load(parent_task_ds)
     parent_task2 = Task.load(parent_task_ds)
+
+    parent_task1._play = None
+    parent_task2._play = None
 
     task_ds = {'include': 'include_test.yml'}
     loaded_task1 = TaskInclude.load(task_ds, task_include=parent_task1)
@@ -152,3 +165,27 @@ def test_process_include_simulate_free(mock_iterator, mock_variable_manager):
 
     assert res[0]._args == {}
     assert res[1]._args == {}
+
+    assert res[0]._vars == {}
+    assert res[1]._vars == {}
+
+
+def test_empty_raw_params():
+    parent_task_ds = {'debug': 'msg=foo'}
+    parent_task = Task.load(parent_task_ds)
+    parent_task._play = None
+
+    task_ds_list = [
+        {
+            'include': ''
+        },
+        {
+            'include_tasks': ''
+        },
+        {
+            'import_tasks': ''
+        }
+    ]
+    for task_ds in task_ds_list:
+        with pytest.raises(AnsibleParserError):
+            TaskInclude.load(task_ds, task_include=parent_task)

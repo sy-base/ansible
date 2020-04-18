@@ -23,7 +23,6 @@ import random
 import re
 import time
 
-import ansible.constants as C
 from ansible.errors import AnsibleError
 from ansible.module_utils.six import text_type
 from ansible.module_utils.six.moves import shlex_quote
@@ -39,13 +38,8 @@ class ShellBase(AnsiblePlugin):
         super(ShellBase, self).__init__()
 
         self.env = {}
-        if C.DEFAULT_MODULE_SET_LOCALE:
-            module_locale = C.DEFAULT_MODULE_LANG
-            self.env = {'LANG': module_locale,
-                        'LC_ALL': module_locale,
-                        'LC_MESSAGES': module_locale}
-
         self.tmpdir = None
+        self.executable = None
 
     def _normalize_system_tmpdirs(self):
         # Normalize the tmp directory strings. We don't use expanduser/expandvars because those
@@ -65,16 +59,25 @@ class ShellBase(AnsiblePlugin):
 
         super(ShellBase, self).set_options(task_keys=task_keys, var_options=var_options, direct=direct)
 
-        # set env
-        self.env.update(self.get_option('environment'))
+        # set env if needed, deal with environment's 'dual nature' list of dicts or dict
+        env = self.get_option('environment')
+        if isinstance(env, list):
+            for env_dict in env:
+                self.env.update(env_dict)
+        else:
+            self.env.update(env)
 
         # We can remove the try: except in the future when we make ShellBase a proper subset of
         # *all* shells.  Right now powershell and third party shells which do not use the
         # shell_common documentation fragment (and so do not have system_tmpdirs) will fail
         try:
             self._normalize_system_tmpdirs()
-        except AnsibleError:
+        except KeyError:
             pass
+
+    @staticmethod
+    def _generate_temp_dir_name():
+        return 'ansible-tmp-%s-%s-%s' % (time.time(), os.getpid(), random.randint(0, 2**48))
 
     def env_prefix(self, **kwargs):
         return ' '.join(['%s=%s' % (k, shlex_quote(text_type(v))) for k, v in kwargs.items()])
@@ -125,7 +128,7 @@ class ShellBase(AnsiblePlugin):
 
     def mkdtemp(self, basefile=None, system=False, mode=0o700, tmpdir=None):
         if not basefile:
-            basefile = 'ansible-tmp-%s-%s' % (time.time(), random.randint(0, 2**48))
+            basefile = self.__class__._generate_temp_dir_name()
 
         # When system is specified we have to create this in a directory where
         # other users can read and access the tmp directory.
@@ -137,7 +140,8 @@ class ShellBase(AnsiblePlugin):
         # passed in tmpdir if it is valid or the first one from the setting if not.
 
         if system:
-            tmpdir = tmpdir.rstrip('/')
+            if tmpdir:
+                tmpdir = tmpdir.rstrip('/')
 
             if tmpdir in self.get_option('system_tmpdirs'):
                 basetmpdir = tmpdir
@@ -151,7 +155,9 @@ class ShellBase(AnsiblePlugin):
 
         basetmp = self.join_path(basetmpdir, basefile)
 
-        cmd = 'mkdir -p %s echo %s %s' % (self._SHELL_SUB_LEFT, basetmp, self._SHELL_SUB_RIGHT)
+        # use mkdir -p to ensure parents exist, but mkdir fullpath to ensure last one is created by us
+        cmd = 'mkdir -p %s echo %s %s' % (self._SHELL_SUB_LEFT, basetmpdir, self._SHELL_SUB_RIGHT)
+        cmd += '%s mkdir %s' % (self._SHELL_AND, basetmp)
         cmd += ' %s echo %s=%s echo %s %s' % (self._SHELL_AND, basefile, self._SHELL_SUB_LEFT, basetmp, self._SHELL_SUB_RIGHT)
 
         # change the umask in a subshell to achieve the desired mode
@@ -170,7 +176,7 @@ class ShellBase(AnsiblePlugin):
             http://pubs.opengroup.org/onlinepubs/000095399/basedefs/xbd_chap03.html#tag_03_426
             http://pubs.opengroup.org/onlinepubs/000095399/basedefs/xbd_chap03.html#tag_03_276
 
-            Falls back to 'current workind directory' as we assume 'home is where the remote user ends up'
+            Falls back to 'current working directory' as we assume 'home is where the remote user ends up'
         '''
 
         # Check that the user_path to expand is safe
@@ -215,3 +221,7 @@ class ShellBase(AnsiblePlugin):
     def wrap_for_exec(self, cmd):
         """wrap script execution with any necessary decoration (eg '&' for quoted powershell script paths)"""
         return cmd
+
+    def quote(self, cmd):
+        """Returns a shell-escaped string that can be safely used as one token in a shell command line"""
+        return shlex_quote(cmd)

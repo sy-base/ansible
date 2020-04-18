@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 """Make sure the data in BOTMETA.yml is valid"""
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
 import glob
 import os
@@ -7,12 +9,10 @@ import re
 import sys
 import yaml
 
-from voluptuous import Any, MultipleInvalid, Required, Schema
+from voluptuous import All, Any, Match, MultipleInvalid, Required, Schema
 from voluptuous.humanize import humanize_error
 
 from ansible.module_utils.six import string_types
-
-list_string_types = list(string_types)
 
 
 def main():
@@ -25,9 +25,11 @@ def main():
     except yaml.error.MarkedYAMLError as ex:
         print('%s:%d:%d: YAML load failed: %s' % (path, ex.context_mark.line + 1, ex.context_mark.column + 1, re.sub(r'\s+', ' ', str(ex))))
         sys.exit()
-    except Exception as ex:
+    except Exception as ex:  # pylint: disable=broad-except
         print('%s:%d:%d: YAML load failed: %s' % (path, 0, 0, re.sub(r'\s+', ' ', str(ex))))
         sys.exit()
+
+    list_string_types = list(string_types)
 
     files_schema = Any(
         Schema(*string_types),
@@ -36,7 +38,12 @@ def main():
             'keywords': Any(list_string_types, *string_types),
             'labels': Any(list_string_types, *string_types),
             'maintainers': Any(list_string_types, *string_types),
+            'migrated_to': All(
+                Any(*string_types),
+                Match(r'^\w+\.\w+$'),
+            ),
             'notified': Any(list_string_types, *string_types),
+            'supershipit': Any(list_string_types, *string_types),
             'support': Any("core", "network", "community"),
         })
     )
@@ -46,6 +53,8 @@ def main():
 
     schema = Schema({
         Required('automerge'): bool,
+        Required('collection_redirect'): bool,
+        Required('notifications'): bool,
         Required('files'): Any(None, *list_dict_file_schema),
         Required('macros'): dict,  # Any(*list_macros_schema),
     })
@@ -64,25 +73,13 @@ def main():
     if botmeta_support != 'core':
         print('%s:%d:%d: .github/BOTMETA.yml MUST be support: core' % (path, 0, 0))
 
-    # We have two macros to define locations, ensure they haven't been removed
-    module_utils_path = botmeta.get('macros', {}).get('module_utils', '')
-    modules_path = botmeta.get('macros', {}).get('modules', '')
-
-    if module_utils_path != 'lib/ansible/module_utils':
-        print('%s:%d:%d: [macros][module_utils] has been changed or removed' % (path, 0, 0))
-
-    if modules_path != 'lib/ansible/modules':
-        print('%s:%d:%d: [macros][modules] has been changed or removed' % (path, 0, 0))
-
-    # See if all `files:` are valid
-    for file in botmeta['files']:
-        file = file.replace('$module_utils', module_utils_path)
-        file = file.replace('$modules', modules_path)
-        if not os.path.exists(file):
-            # Not a file or directory, though maybe the prefix to one?
-            # https://github.com/ansible/ansibullbot/pull/1023
-            if not glob.glob('%s*' % file):
-                print("%s:%d:%d: Can't find '%s.*' in this branch" % (path, 0, 0, file))
+    # Find all path (none-team) macros so we can substitute them
+    macros = botmeta.get('macros', {})
+    path_macros = []
+    for macro in macros:
+        if macro.startswith('team_'):
+            continue
+        path_macros.append(macro)
 
 
 if __name__ == '__main__':
@@ -91,4 +88,4 @@ if __name__ == '__main__':
 # Possible future work
 # * Schema for `macros:` - currently ignored due to team_ansible
 # * Ensure that all $teams mention in `files:` exist in `$macros`
-# * Validate GitHub names - possibly expensive lookup needed
+# * Validate GitHub names - possibly expensive lookup needed - No should be validated when module is added - gundalow

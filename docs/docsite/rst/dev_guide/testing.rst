@@ -7,14 +7,19 @@ Testing Ansible
 .. contents:: Topics
    :local:
 
-Introduction
-============
 
-This document describes:
+Why test your Ansible contributions?
+====================================
 
-* how Ansible is tested
-* how to test Ansible locally
-* how to extend the testing capabilities
+If you're a developer, one of the most valuable things you can do is to look at GitHub issues and help fix bugs, since bug-fixing is almost always prioritized over feature development.  Even for non-developers, helping to test pull requests for bug fixes and features is still immensely valuable.
+
+Ansible users who understand how to write playbooks and roles should be able to test their work.  GitHub pull requests will automatically run a variety of tests (e.g., Shippable) that show bugs in action.  However, contributors must also test their work outside of the automated GitHub checks and show evidence of these tests in the PR to ensure that their work will be more likely to be reviewed and merged.
+
+Read on to learn how Ansible is tested, how to test your contributions locally, and how to extend testing capabilities.
+
+If you want to learn on how testing collections, you should read :ref:`testing_collections`
+
+
 
 Types of tests
 ==============
@@ -42,7 +47,7 @@ development.
 
 Even for non developers, helping to test pull requests for bug fixes and features is still
 immensely valuable.  Ansible users who understand writing playbooks and roles should be
-able to add integration tests and so Github pull requests with integration tests that show
+able to add integration tests and so GitHub pull requests with integration tests that show
 bugs in action will also be a great way to help.
 
 
@@ -88,7 +93,8 @@ Occasionally you may find your PR fails due to a reason unrelated to your change
 
 If either of these issues appear to be the case, you can rerun the Shippable test by:
 
-* closing and re-opening the PR
+* adding a comment with ``/rebuild`` (full rebuild) or ``/rebuild_failed`` (rebuild only failed CI nodes) to the PR
+* closing and re-opening the PR (full rebuild)
 * making another change to the PR and pushing to GitHub
 
 If the issue persists, please contact us in ``#ansible-devel`` on Freenode IRC.
@@ -107,8 +113,7 @@ Setup: Checking out a Pull Request
 You can do this by:
 
 * checking out Ansible
-* making a test branch off the main branch
-* merging a GitHub issue
+* fetching the proposed changes into a test branch
 * testing
 * commenting on that particular issue on GitHub
 
@@ -128,21 +133,20 @@ Create a fresh area to work::
    git clone https://github.com/ansible/ansible.git ansible-pr-testing
    cd ansible-pr-testing
 
-Next, find the pull request you'd like to test and make note of the line at the top which describes the source
-and destination repositories. It will look something like this::
+Next, find the pull request you'd like to test and make note of its number. It will look something like this::
 
-   Someuser wants to merge 1 commit into ansible:devel from someuser:feature_branch_name
+   Use os.path.sep instead of hardcoding / #65381
 
 .. note:: Only test ``ansible:devel``
 
    It is important that the PR request target be ``ansible:devel``, as we do not accept pull requests into any other branch. Dot releases are cherry-picked manually by Ansible staff.
 
-The username and branch at the end are the important parts, which will be turned into git commands as follows::
+Use the pull request number when you fetch the proposed changes and create your branch for testing::
 
-   git checkout -b testing_PRXXXX devel
-   git pull https://github.com/someuser/ansible.git feature_branch_name
+   git fetch origin refs/pull/XXXX/head:testing_PRXXXX
+   git checkout testing_PRXXXX
 
-The first command creates and switches to a new branch named ``testing_PRXXXX``, where the XXXX is the actual issue number associated with the pull request (for example, 1234). This branch is based on the ``devel`` branch. The second command pulls the new code from the users feature branch into the newly created branch.
+The first command fetches the proposed changes from the pull request and creates a new branch named ``testing_PRXXXX``, where the XXXX is the actual number associated with the pull request (for example, 65381). The second command checks out the newly created branch.
 
 .. note::
    If the GitHub user interface shows that the pull request will not merge cleanly, we do not recommend proceeding if you are not somewhat familiar with git and coding, as you will have to resolve a merge conflict. This is the responsibility of the original pull request contributor.
@@ -204,7 +208,7 @@ The code coverage reports only cover the ``devel`` branch of Ansible where new f
 development takes place.  Pull requests and new code will be missing from the codecov.io
 coverage reports so local reporting is needed.  Most ``ansible-test`` commands allow you
 to collect code coverage, this is particularly useful to indicate where to extend
-testing. See :doc:`testing_running_locally` for more information.
+testing. See :ref:`testing_running_locally` for more information.
 
 
 Want to know more about testing?
@@ -212,4 +216,3 @@ Want to know more about testing?
 
 If you'd like to know more about the plans for improving testing Ansible then why not join the
 `Testing Working Group <https://github.com/ansible/community/blob/master/meetings/README.md>`_.
-

@@ -84,6 +84,7 @@ To pass Active Directory username/password via the environment, define the follo
 
 * AZURE_AD_USER
 * AZURE_PASSWORD
+* AZURE_SUBSCRIPTION_ID
 
 To pass Active Directory username/password in ADFS via the environment, define the following variables:
 
@@ -93,13 +94,13 @@ To pass Active Directory username/password in ADFS via the environment, define t
 * AZURE_TENANT
 * AZURE_ADFS_AUTHORITY_URL
 
-"AZURE_ADFS_AUTHORITY_URL" is optional. It's necessary only when you have own ADFS authority like https://xxx.com/adfs.
+"AZURE_ADFS_AUTHORITY_URL" is optional. It's necessary only when you have own ADFS authority like https://yourdomain.com/adfs.
 
 Storing in a File
 `````````````````
 
 When working in a development environment, it may be desirable to store credentials in a file. The modules will look
-for credentials in $HOME/.azure/credentials. This file is an ini style file. It will look as follows:
+for credentials in ``$HOME/.azure/credentials``. This file is an ini style file. It will look as follows:
 
 .. code-block:: ini
 
@@ -108,6 +109,8 @@ for credentials in $HOME/.azure/credentials. This file is an ini style file. It 
     client_id=xxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
     secret=xxxxxxxxxxxxxxxxx
     tenant=xxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+.. note:: If your secret values contain non-ASCII characters, you must `URL Encode <https://www.w3schools.com/tags/ref_urlencode.asp>`_ them to avoid login errors.
 
 It is possible to store multiple sets of credentials within the credentials file by creating multiple sections. Each
 section is considered a profile. The modules look for the [default] profile automatically. Define AZURE_PROFILE in the
@@ -127,6 +130,7 @@ Or, pass the following parameters for Active Directory username/password:
 
 * ad_user
 * password
+* subscription_id
 
 Or, pass the following parameters for ADFS username/pasword:
 
@@ -136,7 +140,7 @@ Or, pass the following parameters for ADFS username/pasword:
 * tenant
 * adfs_authority_url
 
-"adfs_authority_url" is optional. It's necessary only when you have own ADFS authority like https://xxx.com/adfs.
+"adfs_authority_url" is optional. It's necessary only when you have own ADFS authority like https://yourdomain.com/adfs.
 
 
 Other Cloud Environments
@@ -253,14 +257,38 @@ virtual network already with an existing subnet, you can run the following to cr
         version: latest
 
 
+Creating a Virtual Machine in Availability Zones
+..................................................
+
+If you want to create a VM in an availability zone,
+consider the following:
+
+* Both OS disk and data disk must be a 'managed disk', not an 'unmanaged disk'.
+* When creating a VM with the ``azure_rm_virtualmachine`` module,
+  you need to explicitly set the ``managed_disk_type`` parameter
+  to change the OS disk to a managed disk.
+  Otherwise, the OS disk becomes  an unmanaged disk..
+* When you create a data disk with  the ``azure_rm_manageddisk`` module,
+  you need to  explicitly specify the  ``storage_account_type`` parameter
+  to make it a  managed disk.
+  Otherwise, the data disk will be an unmanaged disk.
+* A managed disk does not require a storage account or a storage container,
+  unlike  a n unmanaged disk.
+  In particular, note that once a VM is created on an unmanaged disk,
+  an unnecessary storage container named "vhds" is automatically created.
+* When you create an IP address with the ``azure_rm_publicipaddress`` module,
+  you must set the  ``sku`` parameter to ``standard``.
+  Otherwise, the IP address cannot be used in an availability zone.
+
+
 Dynamic Inventory Script
 ------------------------
 
 If you are not familiar with Ansible's dynamic inventory scripts, check out :ref:`Intro to Dynamic Inventory <intro_dynamic_inventory>`.
 
-The Azure Resource Manager inventory script is called azure_rm.py. It authenticates with the Azure API exactly the same as the
+The Azure Resource Manager inventory script is called  `azure_rm.py  <https://raw.githubusercontent.com/ansible/ansible/devel/contrib/inventory/azure_rm.py>`_. It authenticates with the Azure API exactly the same as the
 Azure modules, which means you will either define the same environment variables described above in `Using Environment Variables`_,
-create a $HOME/.azure/credentials file (also described above in `Storing in a File`_), or pass command line parameters. To see available command
+create a ``$HOME/.azure/credentials`` file (also described above in `Storing in a File`_), or pass command line parameters. To see available command
 line options execute the following:
 
 .. code-block:: bash
@@ -407,8 +435,8 @@ Here are some examples using the inventory script:
     # Execute win_ping on all Windows instances
     $ ansible -i azure_rm.py windows -m win_ping
 
-    # Execute win_ping on all Windows instances
-    $ ansible -i azure_rm.py winux -m ping
+    # Execute ping on all Linux instances
+    $ ansible -i azure_rm.py linux -m ping
 
     # Use the inventory script to print instance specific information
     $ ./ansible/contrib/inventory/azure_rm.py --host my_instance_host_name --resource-groups=Testing --pretty

@@ -49,9 +49,17 @@ class LinuxVirtual(Virtual):
 
         # lxc does not always appear in cgroups anymore but sets 'container=lxc' environment var, requires root privs
         if os.path.exists('/proc/1/environ'):
-            for line in get_file_lines('/proc/1/environ'):
+            for line in get_file_lines('/proc/1/environ', line_sep='\x00'):
                 if re.search('container=lxc', line):
                     virtual_facts['virtualization_type'] = 'lxc'
+                    virtual_facts['virtualization_role'] = 'guest'
+                    return virtual_facts
+                if re.search('container=podman', line):
+                    virtual_facts['virtualization_type'] = 'podman'
+                    virtual_facts['virtualization_role'] = 'guest'
+                    return virtual_facts
+                if re.search('^container=.', line):
+                    virtual_facts['virtualization_type'] = 'container'
                     virtual_facts['virtualization_role'] = 'guest'
                     return virtual_facts
 
@@ -80,77 +88,63 @@ class LinuxVirtual(Virtual):
                 pass
             return virtual_facts
 
+        # assume guest for this block
+        virtual_facts['virtualization_role'] = 'guest'
+
         product_name = get_file_content('/sys/devices/virtual/dmi/id/product_name')
 
-        if product_name in ['KVM', 'Bochs']:
+        if product_name in ('KVM', 'KVM Server', 'Bochs', 'AHV'):
             virtual_facts['virtualization_type'] = 'kvm'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
         if product_name == 'RHEV Hypervisor':
             virtual_facts['virtualization_type'] = 'RHEV'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
-        if product_name in ['VMware Virtual Platform', 'VMware7,1']:
+        if product_name in ('VMware Virtual Platform', 'VMware7,1'):
             virtual_facts['virtualization_type'] = 'VMware'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
-        if product_name in ['OpenStack Compute', 'OpenStack Nova']:
+        if product_name in ('OpenStack Compute', 'OpenStack Nova'):
             virtual_facts['virtualization_type'] = 'openstack'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
         bios_vendor = get_file_content('/sys/devices/virtual/dmi/id/bios_vendor')
 
         if bios_vendor == 'Xen':
             virtual_facts['virtualization_type'] = 'xen'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
         if bios_vendor == 'innotek GmbH':
             virtual_facts['virtualization_type'] = 'virtualbox'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
-        if bios_vendor == 'Amazon EC2':
+        if bios_vendor in ('Amazon EC2', 'DigitalOcean', 'Hetzner'):
             virtual_facts['virtualization_type'] = 'kvm'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
         sys_vendor = get_file_content('/sys/devices/virtual/dmi/id/sys_vendor')
 
+        KVM_SYS_VENDORS = ('QEMU', 'oVirt', 'Amazon EC2', 'DigitalOcean', 'Google', 'Scaleway', 'Nutanix')
+        if sys_vendor in KVM_SYS_VENDORS:
+            virtual_facts['virtualization_type'] = 'kvm'
+            return virtual_facts
+
         # FIXME: This does also match hyperv
         if sys_vendor == 'Microsoft Corporation':
             virtual_facts['virtualization_type'] = 'VirtualPC'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
         if sys_vendor == 'Parallels Software International Inc.':
             virtual_facts['virtualization_type'] = 'parallels'
-            virtual_facts['virtualization_role'] = 'guest'
-            return virtual_facts
-
-        if sys_vendor == 'QEMU':
-            virtual_facts['virtualization_type'] = 'kvm'
-            virtual_facts['virtualization_role'] = 'guest'
-            return virtual_facts
-
-        if sys_vendor == 'oVirt':
-            virtual_facts['virtualization_type'] = 'kvm'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
         if sys_vendor == 'OpenStack Foundation':
             virtual_facts['virtualization_type'] = 'openstack'
-            virtual_facts['virtualization_role'] = 'guest'
             return virtual_facts
 
-        if sys_vendor == 'Amazon EC2':
-            virtual_facts['virtualization_type'] = 'kvm'
-            virtual_facts['virtualization_role'] = 'guest'
-            return virtual_facts
+        # unassume guest
+        del virtual_facts['virtualization_role']
 
         if os.path.exists('/proc/self/status'):
             for line in get_file_lines('/proc/self/status'):
@@ -203,23 +197,20 @@ class LinuxVirtual(Virtual):
                 modules.append(data[0])
 
             if 'kvm' in modules:
+                virtual_facts['virtualization_type'] = 'kvm'
+                virtual_facts['virtualization_role'] = 'host'
 
                 if os.path.isdir('/rhev/'):
-
                     # Check whether this is a RHEV hypervisor (is vdsm running ?)
                     for f in glob.glob('/proc/[0-9]*/comm'):
                         try:
-                            if open(f).read().rstrip() == 'vdsm':
+                            with open(f) as virt_fh:
+                                comm_content = virt_fh.read().rstrip()
+                            if comm_content == 'vdsm':
                                 virtual_facts['virtualization_type'] = 'RHEV'
                                 break
                         except Exception:
                             pass
-                    else:
-                        virtual_facts['virtualization_type'] = 'kvm'
-
-                else:
-                    virtual_facts['virtualization_type'] = 'kvm'
-                    virtual_facts['virtualization_role'] = 'host'
 
                 return virtual_facts
 

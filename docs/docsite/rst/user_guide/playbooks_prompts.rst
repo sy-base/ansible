@@ -1,39 +1,38 @@
-Prompts
-=======
+.. _playbooks_prompts:
 
-When running a playbook, you may wish to prompt the user for certain input, and can
-do so with the 'vars_prompt' section.  
+**************************
+Interactive input: prompts
+**************************
 
-A common use for this might be for asking for sensitive data that you do not want to record.
+If you want your playbook to prompt the user for certain input, add a 'vars_prompt' section. Prompting the user for variables lets you avoid recording sensitive data like passwords. In addition to security, prompts support flexibility. For example, if you use one playbook across multiple software releases, you could prompt for the particular release version.
 
-This has uses beyond security, for instance, you may use the same playbook for all
-software releases and would prompt for a particular release version
-in a push-script.
+.. contents::
+   :local:
 
 Here is a most basic example::
 
     ---
     - hosts: all
-      remote_user: root
-
-      vars:
-        from: "camelot"
-
       vars_prompt:
-        - name: "name"
-          prompt: "what is your name?"
-        - name: "quest"
-          prompt: "what is your quest?"
-        - name: "favcolor"
-          prompt: "what is your favorite color?"
 
+        - name: username
+          prompt: "What is your username?"
+          private: no
+
+        - name: password
+          prompt: "What is your password?"
+
+      tasks:
+
+        - debug:
+            msg: 'Logging in as {{ username }}'
+
+The user input is hidden by default but it can be made visible by setting ``private: no``.
 
 .. note::
-    Prompts for individual ``vars_prompt`` variables will be skipped for any variable that is already defined through the command line ``--extra-vars`` option, or when running from a non-interactive session (such as cron or Ansible Tower). See :ref:`passing_variables_on_the_command_line` in the /Variables/ chapter.
+    Prompts for individual ``vars_prompt`` variables will be skipped for any variable that is already defined through the command line ``--extra-vars`` option, or when running from a non-interactive session (such as cron or Ansible Tower). See :ref:`passing_variables_on_the_command_line`.
 
-If you have a variable that changes infrequently, it might make sense to
-provide a default value that can be overridden.  This can be accomplished using
-the default argument::
+If you have a variable that changes infrequently, you can provide a default value that can be overridden::
 
    vars_prompt:
 
@@ -41,21 +40,10 @@ the default argument::
        prompt: "Product release version"
        default: "1.0"
 
-An alternative form of vars_prompt allows for hiding input from the user, and may later support
-some other options, but otherwise works equivalently::
+Encrypting values supplied by ``vars_prompt``
+---------------------------------------------
 
-   vars_prompt:
-
-     - name: "some_password"
-       prompt: "Enter password"
-       private: yes
-
-     - name: "release_version"
-       prompt: "Product release version"
-       private: no
-
-If `Passlib <https://passlib.readthedocs.io/en/stable/>`_ is installed, vars_prompt can also encrypt the
-entered value so you can use it, for instance, with the user module to define a password::
+You can encrypt the entered value so you can use it, for instance, with the user module to define a password::
 
    vars_prompt:
 
@@ -66,7 +54,7 @@ entered value so you can use it, for instance, with the user module to define a 
        confirm: yes
        salt_size: 7
 
-You can use any crypt scheme supported by 'Passlib':
+If you have `Passlib <https://passlib.readthedocs.io/en/stable/>`_ installed, you can use any crypt scheme the library supports:
 
 - *des_crypt* - DES Crypt
 - *bsdi_crypt* - BSDi Crypt
@@ -86,32 +74,42 @@ You can use any crypt scheme supported by 'Passlib':
 - *scram* - SCRAM Hash
 - *bsd_nthash* - FreeBSD's MCF-compatible nthash encoding
 
-However, the only parameters accepted are 'salt' or 'salt_size'. You can use your own salt using
-'salt', or have one generated automatically using 'salt_size'. If nothing is specified, a salt
-of size 8 will be generated.
+The only parameters accepted are 'salt' or 'salt_size'. You can use your own salt by defining
+'salt', or have one generated automatically using 'salt_size'. By default Ansible generates a salt
+of size 8.
 
 .. versionadded:: 2.7
 
-When Passlib is not installed the `crypt <https://docs.python.org/2/library/crypt.html>`_ library is used as fallback.
-Depending on your platform at most the following crypt schemes are supported:
+If you do not have Passlib installed, Ansible uses the `crypt <https://docs.python.org/2/library/crypt.html>`_ library as a fallback. Ansible supports at most four crypt schemes, depending on your platform at most the following crypt schemes are supported:
 
 - *bcrypt* - BCrypt
 - *md5_crypt* - MD5 Crypt
 - *sha256_crypt* - SHA-256 Crypt
 - *sha512_crypt* - SHA-512 Crypt
 
+.. versionadded:: 2.8
+.. _unsafe_prompts:
+
+Allowing special characters in ``vars_prompt`` values
+-----------------------------------------------------
+
+Some special characters, such as ``{`` and ``%`` can create templating errors. If you need to accept special characters, use the ``unsafe`` option::
+
+   vars_prompt:
+     - name: "my_password_with_weird_chars"
+       prompt: "Enter password"
+       unsafe: yes
+       private: yes
+
 .. seealso::
 
-   :doc:`playbooks`
+   :ref:`playbooks_intro`
        An introduction to playbooks
-   :doc:`playbooks_conditionals`
+   :ref:`playbooks_conditionals`
        Conditional statements in playbooks
-   :doc:`playbooks_variables`
+   :ref:`playbooks_variables`
        All about variables
    `User Mailing List <https://groups.google.com/group/ansible-devel>`_
        Have a question?  Stop by the google group!
    `irc.freenode.net <http://irc.freenode.net>`_
        #ansible IRC chat channel
-
-
-

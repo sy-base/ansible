@@ -29,13 +29,18 @@ value is a base64 string of the module util code.
 
 .PARAMETER ModuleName
 [String] The name of the module that is being executed.
+
+.PARAMETER Breakpoints
+A list of line breakpoints to add to the runspace debugger. This is used to
+track module and module_utils coverage.
 #>
 param(
     [Object[]]$Scripts,
     [System.Collections.ArrayList][AllowEmptyCollection()]$Variables,
     [System.Collections.IDictionary]$Environment,
     [System.Collections.IDictionary]$Modules,
-    [String]$ModuleName
+    [String]$ModuleName,
+    [System.Management.Automation.LineBreakpoint[]]$Breakpoints = @()
 )
 
 Write-AnsibleLog "INFO - creating new PowerShell pipeline for $ModuleName" "module_wrapper"
@@ -62,13 +67,14 @@ foreach ($variable in $Variables) {
 
 # set the environment vars
 if ($Environment) {
-    foreach ($env_kv in $Environment.GetEnumerator()) {
-        Write-AnsibleLog "INFO - setting environment '$($env_kv.Key)' for $ModuleName" "module_wrapper"
-        $env_key = $env_kv.Key.Replace("'", "''")
-        $env_value = $env_kv.Value.ToString().Replace("'", "''")
-        $escaped_env_set = "[System.Environment]::SetEnvironmentVariable('$env_key', '$env_value')"
-        $ps.AddScript($escaped_env_set).AddStatement() > $null
-    }
+    # Escaping quotes can be problematic, instead just pass the string to the runspace and set it directly.
+    Write-AnsibleLog "INFO - setting environment vars for $ModuleName" "module_wrapper"
+    $ps.Runspace.SessionStateProxy.SetVariable("_AnsibleEnvironment", $Environment)
+    $ps.AddScript(@'
+foreach ($env_kv in $_AnsibleEnvironment.GetEnumerator()) {
+    [System.Environment]::SetEnvironmentVariable($env_kv.Key, $env_kv.Value)
+}
+'@).AddStatement() > $null
 }
 
 # import the PS modules
@@ -92,41 +98,91 @@ foreach ($script in $Scripts) {
     $ps.AddScript($script).AddStatement() > $null
 }
 
+if ($Breakpoints.Count -gt 0) {
+    Write-AnsibleLog "INFO - adding breakpoint to runspace that will run the modules" "module_wrapper"
+    if ($PSVersionTable.PSVersion.Major -eq 3) {
+        # The SetBreakpoints method was only added in PowerShell v4+. We need to rely on a private method to
+        # achieve the same functionality in this older PowerShell version. This should be removed once we drop
+        # support for PowerShell v3.
+        $set_method = $ps.Runspace.Debugger.GetType().GetMethod(
+            'AddLineBreakpoint', [System.Reflection.BindingFlags]'Instance, NonPublic'
+        )
+        foreach ($b in $Breakpoints) {
+            $set_method.Invoke($ps.Runspace.Debugger, [Object[]]@(,$b)) > $null
+        }
+    } else {
+        $ps.Runspace.Debugger.SetBreakpoints($Breakpoints)
+    }
+}
+
 Write-AnsibleLog "INFO - start module exec with Invoke() - $ModuleName" "module_wrapper"
+
+# temporarily override the stdout stream and create our own in a StringBuilder
+# we use this to ensure there's always an Out pipe and that we capture the
+# output for things like async or psrp
+$orig_out = [System.Console]::Out
+$sb = New-Object -TypeName System.Text.StringBuilder
+$new_out = New-Object -TypeName System.IO.StringWriter -ArgumentList $sb
 try {
+    [System.Console]::SetOut($new_out)
     $module_output = $ps.Invoke()
 } catch {
     # uncaught exception while executing module, present a prettier error for
     # Ansible to parse
-    Write-AnsibleError -Message "Unhandled exception while executing module" `
-        -ErrorRecord $_.Exception.InnerException.ErrorRecord
+    $error_params = @{
+        Message = "Unhandled exception while executing module"
+        ErrorRecord = $_
+    }
+
+    # Be more defensive when trying to find the InnerException in case it isn't
+    # set. This shouldn't ever be the case but if it is then it makes it more
+    # difficult to track down the problem.
+    if ($_.Exception.PSObject.Properties.Name -contains "InnerException") {
+        $inner_exception = $_.Exception.InnerException
+        if ($inner_exception.PSObject.Properties.Name -contains "ErrorRecord") {
+            $error_params.ErrorRecord = $inner_exception.ErrorRecord
+        }
+    }
+
+    Write-AnsibleError @error_params
     $host.SetShouldExit(1)
     return
+} finally {
+    [System.Console]::SetOut($orig_out)
+    $new_out.Dispose()
 }
 
 # other types of errors may not throw an exception in Invoke but rather just
 # set the pipeline state to failed
 if ($ps.InvocationStateInfo.State -eq "Failed" -and $ModuleName -ne "script") {
-    Write-AnsibleError -Message "Unhandled exception while executing module" `
-        -ErrorRecord $ps.InvocationStateInfo.Reason.ErrorRecord
+    $reason = $ps.InvocationStateInfo.Reason
+    $error_params = @{
+        Message = "Unhandled exception while executing module"
+    }
+
+    # The error record should always be set on the reason but this does not
+    # always happen on Server 2008 R2 for some reason (probably memory hotfix).
+    # Be defensive when trying to get the error record and fall back to other
+    # options.
+    if ($null -eq $reason) {
+        $error_params.Message += ": Unknown error"
+    } elseif ($reason.PSObject.Properties.Name -contains "ErrorRecord") {
+        $error_params.ErrorRecord = $reason.ErrorRecord
+    } else {
+        $error_params.Message += ": $($reason.ToString())"
+    }
+
+    Write-AnsibleError @error_params
     $host.SetShouldExit(1)
     return
 }
 
 Write-AnsibleLog "INFO - module exec ended $ModuleName" "module_wrapper"
-$ansible_output = $ps.Runspace.SessionStateProxy.GetVariable("_ansible_output")
-
-# _ansible_output is a special var used by new modules to store the
-# output JSON. If set, we consider the ExitJson and FailJson methods
-# called and assume it contains the JSON we want and the pipeline
-# output won't contain anything of note
-# TODO: should we validate it or use a random variable name?
-# TODO: should we use this behaviour for all new modules and not just
-# ones running under psrp
-if ($null -ne $ansible_output) {
-    Write-AnsibleLog "INFO - using the _ansible_output variable for module output - $ModuleName" "module_wrapper"
-    Write-Output -InputObject $ansible_output.ToString()
-} elseif ($module_output.Count -gt 0) {
+$stdout = $sb.ToString()
+if ($stdout) {
+    Write-Output -InputObject $stdout
+}
+if ($module_output.Count -gt 0) {
     # do not output if empty collection
     Write-AnsibleLog "INFO - using the output stream for module output - $ModuleName" "module_wrapper"
     Write-Output -InputObject ($module_output -join "`r`n")

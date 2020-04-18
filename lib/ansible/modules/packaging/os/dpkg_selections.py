@@ -10,7 +10,7 @@ __metaclass__ = type
 
 ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
-                    'supported_by': 'community'}
+                    'supported_by': 'core'}
 
 
 DOCUMENTATION = '''
@@ -21,7 +21,7 @@ description:
     - Change dpkg package selection state via --get-selections and --set-selections.
 version_added: "2.0"
 author:
-- Brian Brazil (@brian-brazil) <brian.brazil@boxever.com>
+- Brian Brazil (@brian-brazil)  <brian.brazil@boxever.com>
 options:
     name:
         description:

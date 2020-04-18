@@ -7,8 +7,6 @@
 from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
-# see examples/playbooks/get_url.yml
-
 ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['stableinterface'],
                     'supported_by': 'core'}
@@ -36,6 +34,7 @@ options:
   url:
     description:
       - HTTP, HTTPS, or FTP URL in the form (http|https|ftp)://[user[:pass]]@host.domain[:port]/path
+    type: str
     required: true
   dest:
     description:
@@ -45,6 +44,7 @@ options:
         used. If a directory, C(force) has no effect.
       - If C(dest) is a directory, the file will always be downloaded
         (regardless of the C(force) option), but replaced only if the contents changed..
+    type: path
     required: true
   tmp_dest:
     description:
@@ -52,6 +52,7 @@ options:
       - When run on Ansible 2.5 or greater, path defaults to ansible's remote_tmp setting
       - When run on Ansible prior to 2.5, it defaults to C(TMPDIR), C(TEMP) or C(TMP) env variables or a platform specific value.
       - U(https://docs.python.org/2/library/tempfile.html#tempfile.tempdir)
+    type: path
     version_added: '2.1'
   force:
     description:
@@ -60,24 +61,25 @@ options:
         will only be downloaded if the destination does not exist. Generally
         should be C(yes) only for small local files.
       - Prior to 0.6, this module behaved as if C(yes) was the default.
-    version_added: '0.7'
-    default: 'no'
+      - Alias C(thirsty) has been deprecated and will be removed in 2.13.
     type: bool
+    default: no
     aliases: [ thirsty ]
+    version_added: '0.7'
   backup:
     description:
       - Create a backup file including the timestamp information so you can get
         the original file back if you somehow clobbered it incorrectly.
-    required: false
-    default: 'no'
     type: bool
+    default: no
     version_added: '2.1'
   sha256sum:
     description:
       - If a SHA-256 checksum is passed to this parameter, the digest of the
         destination file will be calculated after it is downloaded to ensure
         its integrity and verify that the transfer completed successfully.
-        This option is deprecated. Use C(checksum) instead.
+        This option is deprecated and will be removed in version 2.14. Use
+        option C(checksum) instead.
     default: ''
     version_added: "1.3"
   checksum:
@@ -93,75 +95,87 @@ options:
       - Additionally, if a checksum is passed to this parameter, and the file exist under
         the C(dest) location, the I(destination_checksum) would be calculated, and if
         checksum equals I(destination_checksum), the file download would be skipped
-        (unless C(force) is true).
+        (unless C(force) is true). If the checksum does not equal I(destination_checksum),
+        the destination file is deleted.
+    type: str
     default: ''
     version_added: "2.0"
   use_proxy:
     description:
       - if C(no), it will not use a proxy, even if one is defined in
         an environment variable on the target hosts.
-    default: 'yes'
     type: bool
+    default: yes
   validate_certs:
     description:
-      - If C(no), SSL certificates will not be validated. This should only be used
-        on personally controlled sites using self-signed certificates.
-    default: 'yes'
+      - If C(no), SSL certificates will not be validated.
+      - This should only be used on personally controlled sites using self-signed certificates.
     type: bool
+    default: yes
   timeout:
     description:
       - Timeout in seconds for URL request.
+    type: int
     default: 10
     version_added: '1.8'
   headers:
     description:
-        - Add custom HTTP headers to a request in hash/dict format. The hash/dict format was added in 2.6.
-          Previous versions used a C("key:value,key:value") string format. The C("key:value,key:value") string
-          format is deprecated and will be removed in version 2.10.
+        - Add custom HTTP headers to a request in hash/dict format.
+        - The hash/dict format was added in Ansible 2.6.
+        - Previous versions used a C("key:value,key:value") string format.
+        - The C("key:value,key:value") string format is deprecated and has been removed in version 2.10.
+    type: dict
     version_added: '2.0'
   url_username:
     description:
       - The username for use in HTTP basic authentication.
       - This parameter can be used without C(url_password) for sites that allow empty passwords.
-      - Since version 2.8 you can also use the 'username' alias for this option.
-    version_added: '1.6'
+      - Since version 2.8 you can also use the C(username) alias for this option.
+    type: str
     aliases: ['username']
+    version_added: '1.6'
   url_password:
     description:
         - The password for use in HTTP basic authentication.
         - If the C(url_username) parameter is not specified, the C(url_password) parameter will not be used.
         - Since version 2.8 you can also use the 'password' alias for this option.
-    version_added: '1.6'
+    type: str
     aliases: ['password']
+    version_added: '1.6'
   force_basic_auth:
-    version_added: '2.0'
     description:
+      - Force the sending of the Basic authentication header upon initial request.
       - httplib2, the library used by the uri module only sends authentication information when a webservice
         responds to an initial request with a 401 status. Since some basic auth services do not properly
-        send a 401, logins will fail. This option forces the sending of the Basic authentication header
-        upon initial request.
-    default: 'no'
+        send a 401, logins will fail.
     type: bool
+    default: no
+    version_added: '2.0'
   client_cert:
     description:
-      - PEM formatted certificate chain file to be used for SSL client
-        authentication. This file can also include the key as well, and if
-        the key is included, C(client_key) is not required.
+      - PEM formatted certificate chain file to be used for SSL client authentication.
+      - This file can also include the key as well, and if the key is included, C(client_key) is not required.
+    type: path
     version_added: '2.4'
   client_key:
     description:
-      - PEM formatted file that contains your private key to be used for SSL
-        client authentication. If C(client_cert) contains both the certificate
-        and key, this option is not required.
+      - PEM formatted file that contains your private key to be used for SSL client authentication.
+      - If C(client_cert) contains both the certificate and key, this option is not required.
+    type: path
     version_added: '2.4'
-  others:
+  http_agent:
     description:
-      - all arguments accepted by the M(file) module also work here
+      - Header to identify as, generally appears in web server logs.
+    type: str
+    default: ansible-httpget
 # informational: requirements for nodes
 extends_documentation_fragment:
     - files
 notes:
      - For Windows targets, use the M(win_get_url) module instead.
+seealso:
+- module: uri
+- module: win_get_url
 author:
 - Jan-Piet Mens (@jpmens)
 '''
@@ -171,7 +185,7 @@ EXAMPLES = r'''
   get_url:
     url: http://example.com/path/file.conf
     dest: /etc/foo.conf
-    mode: 0440
+    mode: '0440'
 
 - name: Download file and force basic auth
   get_url:
@@ -183,7 +197,9 @@ EXAMPLES = r'''
   get_url:
     url: http://example.com/path/file.conf
     dest: /etc/foo.conf
-    headers: 'key:value,key:value'
+    headers:
+      key1: one
+      key2: two
 
 - name: Download file with check (sha256)
   get_url:
@@ -201,7 +217,7 @@ EXAMPLES = r'''
   get_url:
     url: http://example.com/path/file.conf
     dest: /etc/foo.conf
-    checksum: 'sha256:http://example.com/path/sha256sum.txt'
+    checksum: sha256:http://example.com/path/sha256sum.txt
 
 - name: Download file from a file path
   get_url:
@@ -209,7 +225,7 @@ EXAMPLES = r'''
     dest: /tmp/afilecopy.txt
 
 - name: < Fetch file that requires authentication.
-        username/password only availabe since 2.8, in older versions you ned to use url_username/url_password
+        username/password only available since 2.8, in older versions you need to use url_username/url_password
   get_url:
     url: http://example.com/path/file.conf
     dest: /etc/foo.conf
@@ -221,22 +237,22 @@ RETURN = r'''
 backup_file:
     description: name of backup file created after download
     returned: changed and if backup=yes
-    type: string
+    type: str
     sample: /path/to/file.txt.2015-02-12@22:09~
 checksum_dest:
     description: sha1 checksum of the file after copy
     returned: success
-    type: string
+    type: str
     sample: 6e642bb8dd5c2e027bf21dd923337cbb4214f827
 checksum_src:
     description: sha1 checksum of the file
     returned: success
-    type: string
+    type: str
     sample: 6e642bb8dd5c2e027bf21dd923337cbb4214f827
 dest:
     description: destination file/path
     returned: success
-    type: string
+    type: str
     sample: /path/to/file.txt
 elapsed:
     description: The number of seconds that elapsed while performing the download
@@ -251,32 +267,32 @@ gid:
 group:
     description: group of the file
     returned: success
-    type: string
+    type: str
     sample: "httpd"
 md5sum:
     description: md5 checksum of the file after download
     returned: when supported
-    type: string
+    type: str
     sample: "2a5aeecc61dc98c4d780b14b330e3282"
 mode:
     description: permissions of the target
     returned: success
-    type: string
+    type: str
     sample: "0644"
 msg:
     description: the HTTP message from the request
     returned: always
-    type: string
+    type: str
     sample: OK (unknown bytes)
 owner:
     description: owner of the file
     returned: success
-    type: string
+    type: str
     sample: httpd
 secontext:
     description: the SELinux security context of the file
     returned: success
-    type: string
+    type: str
     sample: unconfined_u:object_r:user_tmp_t:s0
 size:
     description: size of the target
@@ -286,12 +302,12 @@ size:
 src:
     description: source file used after download
     returned: always
-    type: string
+    type: str
     sample: /tmp/tmpAdFLdV
 state:
     description: state of the target
     returned: success
-    type: string
+    type: str
     sample: file
 status_code:
     description: the HTTP status code from the request
@@ -306,7 +322,7 @@ uid:
 url:
     description: the actual URL used for the request
     returned: always
-    type: string
+    type: str
     sample: https://www.ansible.com/
 '''
 
@@ -349,7 +365,7 @@ def url_get(module, url, dest, use_proxy, last_mod_time, force, timeout=10, head
     elapsed = (datetime.datetime.utcnow() - start).seconds
 
     if info['status'] == 304:
-        module.exit_json(url=url, dest=dest, changed=False, msg=info.get('msg', ''), elapsed=elapsed)
+        module.exit_json(url=url, dest=dest, changed=False, msg=info.get('msg', ''), status_code=info['status'], elapsed=elapsed)
 
     # Exceptions in fetch_url may result in a status -1, the ensures a proper error to the user in all cases
     if info['status'] == -1:
@@ -420,7 +436,7 @@ def main():
         sha256sum=dict(type='str', default=''),
         checksum=dict(type='str', default=''),
         timeout=dict(type='int', default=10),
-        headers=dict(type='raw'),
+        headers=dict(type='dict'),
         tmp_dest=dict(type='path'),
     )
 
@@ -432,6 +448,12 @@ def main():
         mutually_exclusive=[['checksum', 'sha256sum']],
     )
 
+    if module.params.get('thirsty'):
+        module.deprecate('The alias "thirsty" has been deprecated and will be removed, use "force" instead', version='2.13')
+
+    if module.params.get('sha256sum'):
+        module.deprecate('The parameter "sha256sum" has been deprecated and will be removed, use "checksum" instead', version='2.14')
+
     url = module.params['url']
     dest = module.params['dest']
     backup = module.params['backup']
@@ -440,6 +462,7 @@ def main():
     checksum = module.params['checksum']
     use_proxy = module.params['use_proxy']
     timeout = module.params['timeout']
+    headers = module.params['headers']
     tmp_dest = module.params['tmp_dest']
 
     result = dict(
@@ -450,18 +473,6 @@ def main():
         elapsed=0,
         url=url,
     )
-
-    # Parse headers to dict
-    if isinstance(module.params['headers'], dict):
-        headers = module.params['headers']
-    elif module.params['headers']:
-        try:
-            headers = dict(item.split(':', 1) for item in module.params['headers'].split(','))
-            module.deprecate('Supplying `headers` as a string is deprecated. Please use dict/hash format for `headers`', version='2.10')
-        except Exception:
-            module.fail_json(msg="The string representation for the `headers` parameter requires a key:value,key:value syntax to be properly parsed.", **result)
-    else:
-        headers = None
 
     dest_is_dir = os.path.isdir(dest)
     last_mod_time = None
@@ -474,33 +485,41 @@ def main():
     if checksum:
         try:
             algorithm, checksum = checksum.split(':', 1)
-            if checksum.startswith('http://') or checksum.startswith('https://') or checksum.startswith('ftp://'):
-                checksum_url = checksum
-                # download checksum file to checksum_tmpsrc
-                checksum_tmpsrc, checksum_info = url_get(module, checksum_url, dest, use_proxy, last_mod_time, force, timeout, headers, tmp_dest)
-                with open(checksum_tmpsrc) as f:
-                    lines = [line.rstrip('\n') for line in f]
-                os.remove(checksum_tmpsrc)
-                lines = dict(s.split(None, 1) for s in lines)
-                filename = url_filename(url)
-
-                # Look through each line in the checksum file for a hash corresponding to
-                # the filename in the url, returning the first hash that is found.
-                for cksum in (s for (s, f) in lines.items() if f.strip('./') == filename):
-                    checksum = cksum
-                    break
-                else:
-                    checksum = None
-
-                if checksum is None:
-                    module.fail_json("Unable to find a checksum for file '%s' in '%s'" % (filename, checksum_url))
-            # Remove any non-alphanumeric characters, including the infamous
-            # Unicode zero-width space
-            checksum = re.sub(r'\W+', '', checksum).lower()
-            # Ensure the checksum portion is a hexdigest
-            int(checksum, 16)
         except ValueError:
             module.fail_json(msg="The checksum parameter has to be in format <algorithm>:<checksum>", **result)
+
+        if checksum.startswith('http://') or checksum.startswith('https://') or checksum.startswith('ftp://'):
+            checksum_url = checksum
+            # download checksum file to checksum_tmpsrc
+            checksum_tmpsrc, checksum_info = url_get(module, checksum_url, dest, use_proxy, last_mod_time, force, timeout, headers, tmp_dest)
+            with open(checksum_tmpsrc) as f:
+                lines = [line.rstrip('\n') for line in f]
+            os.remove(checksum_tmpsrc)
+            checksum_map = {}
+            for line in lines:
+                parts = line.split(None, 1)
+                if len(parts) == 2:
+                    checksum_map[parts[0]] = parts[1]
+            filename = url_filename(url)
+
+            # Look through each line in the checksum file for a hash corresponding to
+            # the filename in the url, returning the first hash that is found.
+            for cksum in (s for (s, f) in checksum_map.items() if f.strip('./') == filename):
+                checksum = cksum
+                break
+            else:
+                checksum = None
+
+            if checksum is None:
+                module.fail_json(msg="Unable to find a checksum for file '%s' in '%s'" % (filename, checksum_url))
+        # Remove any non-alphanumeric characters, including the infamous
+        # Unicode zero-width space
+        checksum = re.sub(r'\W+', '', checksum).lower()
+        # Ensure the checksum portion is a hexdigest
+        try:
+            int(checksum, 16)
+        except ValueError:
+            module.fail_json(msg='The checksum format is invalid', **result)
 
     if not dest_is_dir and os.path.exists(dest):
         checksum_mismatch = False
@@ -514,12 +533,10 @@ def main():
                 checksum_mismatch = True
 
         # Not forcing redownload, unless checksum does not match
-        if not force and not checksum_mismatch:
+        if not force and checksum and not checksum_mismatch:
             # Not forcing redownload, unless checksum does not match
             # allow file attribute changes
-            module.params['path'] = dest
-            file_args = module.load_file_common_arguments(module.params)
-            file_args['path'] = dest
+            file_args = module.load_file_common_arguments(module.params, path=dest)
             result['changed'] = module.set_fs_attributes_if_different(file_args, False)
             if result['changed']:
                 module.exit_json(msg="file already exists but file attributes changed", **result)
@@ -552,12 +569,7 @@ def main():
             # it.
             filename = url_filename(info['url'])
         dest = os.path.join(dest, filename)
-
-    # If the remote URL exists, we're done with check mode
-    if module.check_mode:
-        os.remove(tmpsrc)
-        result['changed'] = True
-        module.exit_json(msg=info.get('msg', ''), **result)
+        result['dest'] = dest
 
     # raise an error if there is no tmpsrc file
     if not os.path.exists(tmpsrc):
@@ -586,6 +598,13 @@ def main():
             os.remove(tmpsrc)
             module.fail_json(msg="Destination %s is not writable" % (os.path.dirname(dest)), **result)
 
+    if module.check_mode:
+        if os.path.exists(tmpsrc):
+            os.remove(tmpsrc)
+        result['changed'] = ('checksum_dest' not in result or
+                             result['checksum_src'] != result['checksum_dest'])
+        module.exit_json(msg=info.get('msg', ''), **result)
+
     backup_file = None
     if result['checksum_src'] != result['checksum_dest']:
         try:
@@ -612,9 +631,7 @@ def main():
             module.fail_json(msg="The checksum for %s did not match %s; it was %s." % (dest, checksum, destination_checksum), **result)
 
     # allow file attribute changes
-    module.params['path'] = dest
-    file_args = module.load_file_common_arguments(module.params)
-    file_args['path'] = dest
+    file_args = module.load_file_common_arguments(module.params, path=dest)
     result['changed'] = module.set_fs_attributes_if_different(file_args, result['changed'])
 
     # Backwards compat only.  We'll return None on FIPS enabled systems

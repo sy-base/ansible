@@ -1,690 +1,612 @@
 using Microsoft.Win32.SafeHandles;
 using System;
+using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.ConstrainedExecution;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
-using System.Threading;
-
-// TODO: make some classes/structs private/internal before the next release
+using Ansible.AccessToken;
+using Ansible.Process;
 
 namespace Ansible.Become
 {
-    [StructLayout(LayoutKind.Sequential)]
-    public class SECURITY_ATTRIBUTES
+    internal class NativeHelpers
     {
-        public int nLength;
-        public IntPtr lpSecurityDescriptor;
-        public bool bInheritHandle = false;
-        public SECURITY_ATTRIBUTES()
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct KERB_S4U_LOGON
         {
-            nLength = Marshal.SizeOf(this);
+            public UInt32 MessageType;
+            public UInt32 Flags;
+            public LSA_UNICODE_STRING ClientUpn;
+            public LSA_UNICODE_STRING ClientRealm;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+        public struct LSA_STRING
+        {
+            public UInt16 Length;
+            public UInt16 MaximumLength;
+            [MarshalAs(UnmanagedType.LPStr)] public string Buffer;
+
+            public static implicit operator string(LSA_STRING s)
+            {
+                return s.Buffer;
+            }
+
+            public static implicit operator LSA_STRING(string s)
+            {
+                if (s == null)
+                    s = "";
+
+                LSA_STRING lsaStr = new LSA_STRING
+                {
+                    Buffer = s,
+                    Length = (UInt16)s.Length,
+                    MaximumLength = (UInt16)(s.Length + 1),
+                };
+                return lsaStr;
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct LSA_UNICODE_STRING
+        {
+            public UInt16 Length;
+            public UInt16 MaximumLength;
+            public IntPtr Buffer;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SECURITY_LOGON_SESSION_DATA
+        {
+            public UInt32 Size;
+            public Luid LogonId;
+            public LSA_UNICODE_STRING UserName;
+            public LSA_UNICODE_STRING LogonDomain;
+            public LSA_UNICODE_STRING AuthenticationPackage;
+            public SECURITY_LOGON_TYPE LogonType;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct TOKEN_SOURCE
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public char[] SourceName;
+            public Luid SourceIdentifier;
+        }
+
+        public enum SECURITY_LOGON_TYPE
+        {
+            System = 0, // Used only by the Sytem account
+            Interactive = 2,
+            Network,
+            Batch,
+            Service,
+            Proxy,
+            Unlock,
+            NetworkCleartext,
+            NewCredentials,
+            RemoteInteractive,
+            CachedInteractive,
+            CachedRemoteInteractive,
+            CachedUnlock
         }
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    public class STARTUPINFO
+    internal class NativeMethods
     {
-        public Int32 cb;
-        public IntPtr lpReserved;
-        public IntPtr lpDesktop;
-        public IntPtr lpTitle;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 28)]
-        public byte[] _data1;
-        public Int32 dwFlags;
-        public Int16 wShowWindow;
-        public Int16 cbReserved2;
-        public IntPtr lpReserved2;
-        public SafeFileHandle hStdInput;
-        public SafeFileHandle hStdOutput;
-        public SafeFileHandle hStdError;
-        public STARTUPINFO()
+        [DllImport("advapi32.dll", SetLastError = true)]
+        public static extern bool AllocateLocallyUniqueId(
+            out Luid Luid);
+
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool CreateProcessWithTokenW(
+            SafeNativeHandle hToken,
+            LogonFlags dwLogonFlags,
+            [MarshalAs(UnmanagedType.LPWStr)] string lpApplicationName,
+            StringBuilder lpCommandLine,
+            Process.NativeHelpers.ProcessCreationFlags dwCreationFlags,
+            Process.SafeMemoryBuffer lpEnvironment,
+            [MarshalAs(UnmanagedType.LPWStr)] string lpCurrentDirectory,
+            Process.NativeHelpers.STARTUPINFOEX lpStartupInfo,
+            out Process.NativeHelpers.PROCESS_INFORMATION lpProcessInformation);
+
+        [DllImport("kernel32.dll")]
+        public static extern UInt32 GetCurrentThreadId();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern NoopSafeHandle GetProcessWindowStation();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern NoopSafeHandle GetThreadDesktop(
+            UInt32 dwThreadId);
+
+        [DllImport("secur32.dll", SetLastError = true)]
+        public static extern UInt32 LsaDeregisterLogonProcess(
+            IntPtr LsaHandle);
+
+        [DllImport("secur32.dll", SetLastError = true)]
+        public static extern UInt32 LsaFreeReturnBuffer(
+            IntPtr Buffer);
+
+        [DllImport("secur32.dll", SetLastError = true)]
+        public static extern UInt32 LsaGetLogonSessionData(
+            ref Luid LogonId,
+            out SafeLsaMemoryBuffer ppLogonSessionData);
+
+        [DllImport("secur32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern UInt32 LsaLogonUser(
+            SafeLsaHandle LsaHandle,
+            NativeHelpers.LSA_STRING OriginName,
+            LogonType LogonType,
+            UInt32 AuthenticationPackage,
+            IntPtr AuthenticationInformation,
+            UInt32 AuthenticationInformationLength,
+            IntPtr LocalGroups,
+            NativeHelpers.TOKEN_SOURCE SourceContext,
+            out SafeLsaMemoryBuffer ProfileBuffer,
+            out UInt32 ProfileBufferLength,
+            out Luid LogonId,
+            out SafeNativeHandle Token,
+            out IntPtr Quotas,
+            out UInt32 SubStatus);
+
+        [DllImport("secur32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern UInt32 LsaLookupAuthenticationPackage(
+            SafeLsaHandle LsaHandle,
+            NativeHelpers.LSA_STRING PackageName,
+            out UInt32 AuthenticationPackage);
+
+        [DllImport("advapi32.dll")]
+        public static extern UInt32 LsaNtStatusToWinError(
+            UInt32 Status);
+
+        [DllImport("secur32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern UInt32 LsaRegisterLogonProcess(
+            NativeHelpers.LSA_STRING LogonProcessName,
+            out SafeLsaHandle LsaHandle,
+            out IntPtr SecurityMode);
+    }
+
+    internal class SafeLsaHandle : SafeHandleZeroOrMinusOneIsInvalid
+    {
+        public SafeLsaHandle() : base(true) { }
+
+        [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
+        protected override bool ReleaseHandle()
         {
-            cb = Marshal.SizeOf(this);
+            UInt32 res = NativeMethods.LsaDeregisterLogonProcess(handle);
+            return res == 0;
         }
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    public class STARTUPINFOEX
+    internal class SafeLsaMemoryBuffer : SafeHandleZeroOrMinusOneIsInvalid
     {
-        public STARTUPINFO startupInfo;
-        public IntPtr lpAttributeList;
-        public STARTUPINFOEX()
+        public SafeLsaMemoryBuffer() : base(true) { }
+
+        [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
+        protected override bool ReleaseHandle()
         {
-            startupInfo = new STARTUPINFO();
-            startupInfo.cb = Marshal.SizeOf(this);
+            UInt32 res = NativeMethods.LsaFreeReturnBuffer(handle);
+            return res == 0;
         }
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    public struct PROCESS_INFORMATION
+    internal class NoopSafeHandle : SafeHandle
     {
-        public IntPtr hProcess;
-        public IntPtr hThread;
-        public int dwProcessId;
-        public int dwThreadId;
-    }
+        public NoopSafeHandle() : base(IntPtr.Zero, false) { }
+        public override bool IsInvalid { get { return false; } }
 
-    [StructLayout(LayoutKind.Sequential)]
-    public struct SID_AND_ATTRIBUTES
-    {
-        public IntPtr Sid;
-        public int Attributes;
-    }
-
-    public struct TOKEN_USER
-    {
-        public SID_AND_ATTRIBUTES User;
-    }
-
-    [Flags]
-    public enum StartupInfoFlags : uint
-    {
-        USESTDHANDLES = 0x00000100
-    }
-
-    [Flags]
-    public enum CreationFlags : uint
-    {
-        CREATE_BREAKAWAY_FROM_JOB = 0x01000000,
-        CREATE_DEFAULT_ERROR_MODE = 0x04000000,
-        CREATE_NEW_CONSOLE = 0x00000010,
-        CREATE_SUSPENDED = 0x00000004,
-        CREATE_UNICODE_ENVIRONMENT = 0x00000400,
-        EXTENDED_STARTUPINFO_PRESENT = 0x00080000
-    }
-
-    public enum HandleFlags : uint
-    {
-        None = 0,
-        INHERIT = 1
+        [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
+        protected override bool ReleaseHandle() { return true; }
     }
 
     [Flags]
     public enum LogonFlags
     {
-        LOGON_WITH_PROFILE = 0x00000001,
-        LOGON_NETCREDENTIALS_ONLY = 0x00000002
-    }
-
-    public enum LogonType
-    {
-        LOGON32_LOGON_INTERACTIVE = 2,
-        LOGON32_LOGON_NETWORK = 3,
-        LOGON32_LOGON_BATCH = 4,
-        LOGON32_LOGON_SERVICE = 5,
-        LOGON32_LOGON_UNLOCK = 7,
-        LOGON32_LOGON_NETWORK_CLEARTEXT = 8,
-        LOGON32_LOGON_NEW_CREDENTIALS = 9
-    }
-
-    public enum LogonProvider
-    {
-        LOGON32_PROVIDER_DEFAULT = 0,
-    }
-
-    public enum TokenInformationClass
-    {
-        TokenUser = 1,
-        TokenType = 8,
-        TokenImpersonationLevel = 9,
-        TokenElevationType = 18,
-        TokenLinkedToken = 19,
-    }
-
-    public enum TokenElevationType
-    {
-        TokenElevationTypeDefault = 1,
-        TokenElevationTypeFull,
-        TokenElevationTypeLimited
-    }
-
-    [Flags]
-    public enum ProcessAccessFlags : uint
-    {
-        PROCESS_QUERY_INFORMATION = 0x00000400,
-    }
-
-    public enum SECURITY_IMPERSONATION_LEVEL
-    {
-        SecurityImpersonation,
-    }
-
-    public enum TOKEN_TYPE
-    {
-        TokenPrimary = 1,
-        TokenImpersonation
-    }
-
-    class NativeWaitHandle : WaitHandle
-    {
-        public NativeWaitHandle(IntPtr handle)
-        {
-            this.SafeWaitHandle = new SafeWaitHandle(handle, false);
-        }
-    }
-
-    public class Win32Exception : System.ComponentModel.Win32Exception
-    {
-        private string _msg;
-        public Win32Exception(string message) : this(Marshal.GetLastWin32Error(), message) { }
-        public Win32Exception(int errorCode, string message) : base(errorCode)
-        {
-            _msg = String.Format("{0} ({1}, Win32ErrorCode {2})", message, base.Message, errorCode);
-        }
-        public override string Message { get { return _msg; } }
-        public static explicit operator Win32Exception(string message) { return new Win32Exception(message); }
-    }
-
-    public class CommandResult
-    {
-        public string StandardOut { get; internal set; }
-        public string StandardError { get; internal set; }
-        public uint ExitCode { get; internal set; }
+        WithProfile = 0x00000001,
+        NetcredentialsOnly = 0x00000002
     }
 
     public class BecomeUtil
     {
-        [DllImport("advapi32.dll", SetLastError = true)]
-        private static extern bool LogonUser(
-            string lpszUsername,
-            string lpszDomain,
-            string lpszPassword,
-            LogonType dwLogonType,
-            LogonProvider dwLogonProvider,
-            out IntPtr phToken);
-
-        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool CreateProcessWithTokenW(
-            IntPtr hToken,
-            LogonFlags dwLogonFlags,
-            [MarshalAs(UnmanagedType.LPTStr)]
-            string lpApplicationName,
-            StringBuilder lpCommandLine,
-            CreationFlags dwCreationFlags,
-            IntPtr lpEnvironment,
-            [MarshalAs(UnmanagedType.LPTStr)]
-            string lpCurrentDirectory,
-            STARTUPINFOEX lpStartupInfo,
-            out PROCESS_INFORMATION lpProcessInformation);
-
-        [DllImport("kernel32.dll")]
-        private static extern bool CreatePipe(
-            out SafeFileHandle hReadPipe,
-            out SafeFileHandle hWritePipe,
-            SECURITY_ATTRIBUTES lpPipeAttributes,
-            uint nSize);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool SetHandleInformation(
-            SafeFileHandle hObject,
-            HandleFlags dwMask,
-            int dwFlags);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool GetExitCodeProcess(
-            IntPtr hProcess,
-            out uint lpExitCode);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool CloseHandle(
-            IntPtr hObject);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr GetProcessWindowStation();
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr GetThreadDesktop(
-            int dwThreadId);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern int GetCurrentThreadId();
-
-        [DllImport("advapi32.dll", SetLastError = true)]
-        private static extern bool GetTokenInformation(
-            IntPtr TokenHandle,
-            TokenInformationClass TokenInformationClass,
-            IntPtr TokenInformation,
-            uint TokenInformationLength,
-            out uint ReturnLength);
-
-        [DllImport("psapi.dll", SetLastError = true)]
-        private static extern bool EnumProcesses(
-            [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.U4)]
-                [In][Out] IntPtr[] processIds,
-            uint cb,
-            [MarshalAs(UnmanagedType.U4)]
-                out uint pBytesReturned);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr OpenProcess(
-            ProcessAccessFlags processAccess,
-            bool bInheritHandle,
-            IntPtr processId);
-
-        [DllImport("advapi32.dll", SetLastError = true)]
-        private static extern bool OpenProcessToken(
-            IntPtr ProcessHandle,
-            TokenAccessLevels DesiredAccess,
-            out IntPtr TokenHandle);
-
-        [DllImport("advapi32.dll", SetLastError = true)]
-        private static extern bool ConvertSidToStringSidW(
-            IntPtr pSID,
-            [MarshalAs(UnmanagedType.LPTStr)]
-            out string StringSid);
-
-        [DllImport("advapi32", SetLastError = true)]
-        private static extern bool DuplicateTokenEx(
-            IntPtr hExistingToken,
-            TokenAccessLevels dwDesiredAccess,
-            IntPtr lpTokenAttributes,
-            SECURITY_IMPERSONATION_LEVEL ImpersonationLevel,
-            TOKEN_TYPE TokenType,
-            out IntPtr phNewToken);
-
-        [DllImport("advapi32.dll", SetLastError = true)]
-        private static extern bool ImpersonateLoggedOnUser(
-            IntPtr hToken);
-
-        [DllImport("advapi32.dll", SetLastError = true)]
-        private static extern bool RevertToSelf();
-
-        public static CommandResult RunAsUser(string username, string password, string lpCommandLine,
-            string lpCurrentDirectory, string stdinInput, LogonFlags logonFlags, LogonType logonType)
+        private static List<string> SERVICE_SIDS = new List<string>()
         {
-            SecurityIdentifier account = null;
-            if (logonType != LogonType.LOGON32_LOGON_NEW_CREDENTIALS)
-            {
-                account = GetBecomeSid(username);
-            }
+            "S-1-5-18", // NT AUTHORITY\SYSTEM
+            "S-1-5-19", // NT AUTHORITY\LocalService
+            "S-1-5-20"  // NT AUTHORITY\NetworkService
+        };
+        private static int WINDOWS_STATION_ALL_ACCESS = 0x000F037F;
+        private static int DESKTOP_RIGHTS_ALL_ACCESS = 0x000F01FF;
 
-            STARTUPINFOEX si = new STARTUPINFOEX();
-            si.startupInfo.dwFlags = (int)StartupInfoFlags.USESTDHANDLES;
-
-            SECURITY_ATTRIBUTES pipesec = new SECURITY_ATTRIBUTES();
-            pipesec.bInheritHandle = true;
-
-            // Create the stdout, stderr and stdin pipes used in the process and add to the startupInfo
-            SafeFileHandle stdout_read, stdout_write, stderr_read, stderr_write, stdin_read, stdin_write;
-            if (!CreatePipe(out stdout_read, out stdout_write, pipesec, 0))
-                throw new Win32Exception("STDOUT pipe setup failed");
-            if (!SetHandleInformation(stdout_read, HandleFlags.INHERIT, 0))
-                throw new Win32Exception("STDOUT pipe handle setup failed");
-
-            if (!CreatePipe(out stderr_read, out stderr_write, pipesec, 0))
-                throw new Win32Exception("STDERR pipe setup failed");
-            if (!SetHandleInformation(stderr_read, HandleFlags.INHERIT, 0))
-                throw new Win32Exception("STDERR pipe handle setup failed");
-
-            if (!CreatePipe(out stdin_read, out stdin_write, pipesec, 0))
-                throw new Win32Exception("STDIN pipe setup failed");
-            if (!SetHandleInformation(stdin_write, HandleFlags.INHERIT, 0))
-                throw new Win32Exception("STDIN pipe handle setup failed");
-
-            si.startupInfo.hStdOutput = stdout_write;
-            si.startupInfo.hStdError = stderr_write;
-            si.startupInfo.hStdInput = stdin_read;
-
-            // Setup the stdin buffer
-            UTF8Encoding utf8_encoding = new UTF8Encoding(false);
-            FileStream stdin_fs = new FileStream(stdin_write, FileAccess.Write, 32768);
-            StreamWriter stdin = new StreamWriter(stdin_fs, utf8_encoding, 32768);
-
-            // Create the environment block if set
-            IntPtr lpEnvironment = IntPtr.Zero;
-
-            CreationFlags startup_flags = CreationFlags.CREATE_UNICODE_ENVIRONMENT;
-
-            PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
-
-            // Get the user tokens to try running processes with
-            List<IntPtr> tokens = GetUserTokens(account, username, password, logonType);
-
-            bool launch_success = false;
-            foreach (IntPtr token in tokens)
-            {
-                if (CreateProcessWithTokenW(
-                    token,
-                    logonFlags,
-                    null,
-                    new StringBuilder(lpCommandLine),
-                    startup_flags,
-                    lpEnvironment,
-                    lpCurrentDirectory,
-                    si,
-                    out pi))
-                {
-                    launch_success = true;
-                    break;
-                }
-            }
-
-            if (!launch_success)
-                throw new Win32Exception("Failed to start become process");
-
-            CommandResult result = new CommandResult();
-            // Setup the output buffers and get stdout/stderr
-            FileStream stdout_fs = new FileStream(stdout_read, FileAccess.Read, 4096);
-            StreamReader stdout = new StreamReader(stdout_fs, utf8_encoding, true, 4096);
-            stdout_write.Close();
-
-            FileStream stderr_fs = new FileStream(stderr_read, FileAccess.Read, 4096);
-            StreamReader stderr = new StreamReader(stderr_fs, utf8_encoding, true, 4096);
-            stderr_write.Close();
-
-            stdin.WriteLine(stdinInput);
-            stdin.Close();
-
-            string stdout_str, stderr_str = null;
-            GetProcessOutput(stdout, stderr, out stdout_str, out stderr_str);
-            UInt32 rc = GetProcessExitCode(pi.hProcess);
-
-            result.StandardOut = stdout_str;
-            result.StandardError = stderr_str;
-            result.ExitCode = rc;
-
-            return result;
+        public static Result CreateProcessAsUser(string username, string password, string command)
+        {
+            return CreateProcessAsUser(username, password, LogonFlags.WithProfile, LogonType.Interactive,
+                 null, command, null, null, "");
         }
 
-        private static SecurityIdentifier GetBecomeSid(string username)
+        public static Result CreateProcessAsUser(string username, string password, LogonFlags logonFlags, LogonType logonType,
+            string lpApplicationName, string lpCommandLine, string lpCurrentDirectory, IDictionary environment,
+            string stdin)
         {
-            NTAccount account = new NTAccount(username);
-            try
+            byte[] stdinBytes;
+            if (String.IsNullOrEmpty(stdin))
+                stdinBytes = new byte[0];
+            else
             {
-                SecurityIdentifier security_identifier = (SecurityIdentifier)account.Translate(typeof(SecurityIdentifier));
-                return security_identifier;
+                if (!stdin.EndsWith(Environment.NewLine))
+                    stdin += Environment.NewLine;
+                stdinBytes = new UTF8Encoding(false).GetBytes(stdin);
             }
-            catch (IdentityNotMappedException ex)
-            {
-                throw new Exception(String.Format("Unable to find become user {0}: {1}", username, ex.Message));
-            }
+            return CreateProcessAsUser(username, password, logonFlags, logonType, lpApplicationName, lpCommandLine,
+                lpCurrentDirectory, environment, stdinBytes);
         }
 
-        private static List<IntPtr> GetUserTokens(SecurityIdentifier account, string username, string password, LogonType logonType)
+        /// <summary>
+        /// Creates a process as another user account. This method will attempt to run as another user with the
+        /// highest possible permissions available. The main privilege required is the SeDebugPrivilege, without
+        /// this privilege you can only run as a local or domain user if the username and password is specified.
+        /// </summary>
+        /// <param name="username">The username of the runas user</param>
+        /// <param name="password">The password of the runas user</param>
+        /// <param name="logonFlags">LogonFlags to control how to logon a user when the password is specified</param>
+        /// <param name="logonType">Controls what type of logon is used, this only applies when the password is specified</param>
+        /// <param name="lpApplicationName">The name of the executable or batch file to executable</param>
+        /// <param name="lpCommandLine">The command line to execute, typically this includes lpApplication as the first argument</param>
+        /// <param name="lpCurrentDirectory">The full path to the current directory for the process, null will have the same cwd as the calling process</param>
+        /// <param name="environment">A dictionary of key/value pairs to define the new process environment</param>
+        /// <param name="stdin">Bytes sent to the stdin pipe</param>
+        /// <returns>Ansible.Process.Result object that contains the command output and return code</returns>
+        public static Result CreateProcessAsUser(string username, string password, LogonFlags logonFlags, LogonType logonType,
+            string lpApplicationName, string lpCommandLine, string lpCurrentDirectory, IDictionary environment, byte[] stdin)
         {
-            List<IntPtr> tokens = new List<IntPtr>();
-            List<String> service_sids = new List<String>()
-            {
-                "S-1-5-18", // NT AUTHORITY\SYSTEM
-                "S-1-5-19", // NT AUTHORITY\LocalService
-                "S-1-5-20"  // NT AUTHORITY\NetworkService
-            };
+            // While we use STARTUPINFOEX having EXTENDED_STARTUPINFO_PRESENT causes a parameter validation error
+            Process.NativeHelpers.ProcessCreationFlags creationFlags = Process.NativeHelpers.ProcessCreationFlags.CREATE_UNICODE_ENVIRONMENT;
+            Process.NativeHelpers.PROCESS_INFORMATION pi = new Process.NativeHelpers.PROCESS_INFORMATION();
+            Process.NativeHelpers.STARTUPINFOEX si = new Process.NativeHelpers.STARTUPINFOEX();
+            si.startupInfo.dwFlags = Process.NativeHelpers.StartupInfoFlags.USESTDHANDLES;
 
-            IntPtr hSystemToken = IntPtr.Zero;
-            string account_sid = "";
-            if (logonType != LogonType.LOGON32_LOGON_NEW_CREDENTIALS)
-            {
-                GrantAccessToWindowStationAndDesktop(account);
-                // Try to get SYSTEM token handle so we can impersonate to get full admin token
-                hSystemToken = GetSystemUserHandle();
-                account_sid = account.ToString();
-            }
-            bool impersonated = false;
+            SafeFileHandle stdoutRead, stdoutWrite, stderrRead, stderrWrite, stdinRead, stdinWrite;
+            ProcessUtil.CreateStdioPipes(si, out stdoutRead, out stdoutWrite, out stderrRead, out stderrWrite,
+                out stdinRead, out stdinWrite);
+            FileStream stdinStream = new FileStream(stdinWrite, FileAccess.Write);
 
+            // $null from PowerShell ends up as an empty string, we need to convert back as an empty string doesn't
+            // make sense for these parameters
+            if (lpApplicationName == "")
+                lpApplicationName = null;
+
+            if (lpCurrentDirectory == "")
+                lpCurrentDirectory = null;
+
+            // A user may have 2 tokens, 1 limited and 1 elevated. GetUserTokens will return both token to ensure
+            // we don't close one of the pairs while the process is still running. If the process tries to retrieve
+            // one of the pairs and the token handle is closed then it will fail with ERROR_NO_SUCH_LOGON_SESSION.
+            List<SafeNativeHandle> userTokens = GetUserTokens(username, password, logonType);
             try
             {
-                IntPtr hSystemTokenDup = IntPtr.Zero;
-                if (hSystemToken == IntPtr.Zero && service_sids.Contains(account_sid))
+                using (Process.SafeMemoryBuffer lpEnvironment = ProcessUtil.CreateEnvironmentPointer(environment))
                 {
-                    // We need the SYSTEM token if we want to become one of those accounts, fail here
-                    throw new Win32Exception("Failed to get token for NT AUTHORITY\\SYSTEM");
-                }
-                else if (hSystemToken != IntPtr.Zero)
-                {
-                    // We have the token, need to duplicate and impersonate
-                    bool dupResult = DuplicateTokenEx(
-                        hSystemToken,
-                        TokenAccessLevels.MaximumAllowed,
-                        IntPtr.Zero,
-                        SECURITY_IMPERSONATION_LEVEL.SecurityImpersonation,
-                        TOKEN_TYPE.TokenPrimary,
-                        out hSystemTokenDup);
-                    int lastError = Marshal.GetLastWin32Error();
-                    CloseHandle(hSystemToken);
-
-                    if (!dupResult && service_sids.Contains(account_sid))
-                        throw new Win32Exception(lastError, "Failed to duplicate token for NT AUTHORITY\\SYSTEM");
-                    else if (dupResult && account_sid != "S-1-5-18")
+                    bool launchSuccess = false;
+                    StringBuilder commandLine = new StringBuilder(lpCommandLine);
+                    foreach (SafeNativeHandle token in userTokens)
                     {
-                        if (ImpersonateLoggedOnUser(hSystemTokenDup))
-                            impersonated = true;
-                        else if (service_sids.Contains(account_sid))
-                            throw new Win32Exception("Failed to impersonate as SYSTEM account");
+                        // GetUserTokens could return null if an elevated token could not be retrieved.
+                        if (token == null)
+                            continue;
+
+                        if (NativeMethods.CreateProcessWithTokenW(token, logonFlags, lpApplicationName,
+                                commandLine, creationFlags, lpEnvironment, lpCurrentDirectory, si, out pi))
+                        {
+                            launchSuccess = true;
+                            break;
+                        }
                     }
-                    // If SYSTEM impersonation failed but we're trying to become a regular user, just proceed;
-                    // might get a limited token in UAC-enabled cases, but better than nothing...
+
+                    if (!launchSuccess)
+                        throw new Process.Win32Exception("CreateProcessWithTokenW() failed");
                 }
+                return ProcessUtil.WaitProcess(stdoutRead, stdoutWrite, stderrRead, stderrWrite, stdinStream, stdin,
+                    pi.hProcess);
+            }
+            finally
+            {
+                userTokens.Where(t => t != null).ToList().ForEach(t => t.Dispose());
+            }
+        }
 
-                string domain = null;
+        private static List<SafeNativeHandle> GetUserTokens(string username, string password, LogonType logonType)
+        {
+            List<SafeNativeHandle> userTokens = new List<SafeNativeHandle>();
 
-                if (service_sids.Contains(account_sid))
+            SafeNativeHandle systemToken = null;
+            bool impersonated = false;
+            string becomeSid = username;
+            if (logonType != LogonType.NewCredentials)
+            {
+                // If prefixed with .\, we are becoming a local account, strip the prefix
+                if (username.StartsWith(".\\"))
+                    username = username.Substring(2);
+
+                NTAccount account = new NTAccount(username);
+                becomeSid = ((SecurityIdentifier)account.Translate(typeof(SecurityIdentifier))).Value;
+
+                // Grant access to the current Windows Station and Desktop to the become user
+                GrantAccessToWindowStationAndDesktop(account);
+
+                // Try and impersonate a SYSTEM token, we need a SYSTEM token to either become a well known service
+                // account or have administrative rights on the become access token.
+                systemToken = GetPrimaryTokenForUser(new SecurityIdentifier("S-1-5-18"), new List<string>() { "SeTcbPrivilege" });
+                if (systemToken != null)
                 {
-                    // We're using a well-known service account, do a service logon instead of the actual flag set
-                    logonType = LogonType.LOGON32_LOGON_SERVICE;
-                    domain = "NT AUTHORITY";
-                    password = null;
-                    switch (account_sid)
+                    try
                     {
-                        case "S-1-5-18":
-                            tokens.Add(hSystemTokenDup);
-                            return tokens;
-                        case "S-1-5-19":
-                            username = "LocalService";
-                            break;
-                        case "S-1-5-20":
-                            username = "NetworkService";
-                            break;
+                        TokenUtil.ImpersonateToken(systemToken);
+                        impersonated = true;
+                    }
+                    catch (Process.Win32Exception) { }  // We tried, just rely on current user's permissions.
+                }
+            }
+
+            // We require impersonation if becoming a service sid or becoming a user without a password
+            if (!impersonated && (SERVICE_SIDS.Contains(becomeSid) || String.IsNullOrEmpty(password)))
+                throw new Exception("Failed to get token for NT AUTHORITY\\SYSTEM required for become as a service account or an account without a password");
+
+            try
+            {
+                if (becomeSid == "S-1-5-18")
+                    userTokens.Add(systemToken);
+                // Cannot use String.IsEmptyOrNull() as an empty string is an account that doesn't have a pass.
+                // We only use S4U if no password was defined or it was null
+                else if (!SERVICE_SIDS.Contains(becomeSid) && password == null && logonType != LogonType.NewCredentials)
+                {
+                    // If no password was specified, try and duplicate an existing token for that user or use S4U to
+                    // generate one without network credentials
+                    SecurityIdentifier sid = new SecurityIdentifier(becomeSid);
+                    SafeNativeHandle becomeToken = GetPrimaryTokenForUser(sid);
+                    if (becomeToken != null)
+                    {
+                        userTokens.Add(GetElevatedToken(becomeToken));
+                        userTokens.Add(becomeToken);
+                    }
+                    else
+                    {
+                        becomeToken = GetS4UTokenForUser(sid, logonType);
+                        userTokens.Add(null);
+                        userTokens.Add(becomeToken);
                     }
                 }
                 else
                 {
-                    // We are trying to become a local or domain account
-                    if (username.Contains(@"\"))
+                    string domain = null;
+                    switch (becomeSid)
                     {
-                        var user_split = username.Split(Convert.ToChar(@"\"));
-                        domain = user_split[0];
-                        username = user_split[1];
+                        case "S-1-5-19":
+                            logonType = LogonType.Service;
+                            domain = "NT AUTHORITY";
+                            username = "LocalService";
+                            break;
+                        case "S-1-5-20":
+                            logonType = LogonType.Service;
+                            domain = "NT AUTHORITY";
+                            username = "NetworkService";
+                            break;
+                        default:
+                            // Trying to become a local or domain account
+                            if (username.Contains(@"\"))
+                            {
+                                string[] userSplit = username.Split(new char[1] { '\\' }, 2);
+                                domain = userSplit[0];
+                                username = userSplit[1];
+                            }
+                            else if (!username.Contains("@"))
+                                domain = ".";
+                            break;
                     }
-                    else if (username.Contains("@"))
-                        domain = null;
-                    else
-                        domain = ".";
-                }
 
-                IntPtr hToken = IntPtr.Zero;
-                if (!LogonUser(
-                    username,
-                    domain,
-                    password,
-                    logonType,
-                    LogonProvider.LOGON32_PROVIDER_DEFAULT,
-                    out hToken))
-                {
-                    throw new Win32Exception("LogonUser failed");
-                }
+                    SafeNativeHandle hToken = TokenUtil.LogonUser(username, domain, password, logonType,
+                        LogonProvider.Default);
 
-                if (!service_sids.Contains(account_sid))
-                {
-                    // Try and get the elevated token for local/domain account
-                    IntPtr hTokenElevated = GetElevatedToken(hToken);
-                    tokens.Add(hTokenElevated);
+                    // Get the elevated token for a local/domain accounts only
+                    if (!SERVICE_SIDS.Contains(becomeSid))
+                        userTokens.Add(GetElevatedToken(hToken));
+                    userTokens.Add(hToken);
                 }
-
-                // add the original token as a fallback
-                tokens.Add(hToken);
             }
             finally
             {
                 if (impersonated)
-                    RevertToSelf();
+                    TokenUtil.RevertToSelf();
             }
 
-            return tokens;
+            return userTokens;
         }
 
-        private static IntPtr GetSystemUserHandle()
+        private static SafeNativeHandle GetPrimaryTokenForUser(SecurityIdentifier sid, List<string> requiredPrivileges = null)
         {
-            uint array_byte_size = 1024 * sizeof(uint);
-            IntPtr[] pids = new IntPtr[1024];
-            uint bytes_copied;
+            // According to CreateProcessWithTokenW we require a token with
+            //  TOKEN_QUERY, TOKEN_DUPLICATE and TOKEN_ASSIGN_PRIMARY
+            // Also add in TOKEN_IMPERSONATE so we can get an impersonated token
+            TokenAccessLevels dwAccess = TokenAccessLevels.Query |
+                TokenAccessLevels.Duplicate |
+                TokenAccessLevels.AssignPrimary |
+                TokenAccessLevels.Impersonate;
 
-            if (!EnumProcesses(pids, array_byte_size, out bytes_copied))
+            foreach (SafeNativeHandle hToken in TokenUtil.EnumerateUserTokens(sid, dwAccess))
             {
-                throw new Win32Exception("Failed to enumerate processes");
-            }
-            // TODO: Handle if bytes_copied is larger than the array size and rerun EnumProcesses with larger array
-            uint num_processes = bytes_copied / sizeof(uint);
+                // Filter out any Network logon tokens, using become with that is useless when S4U
+                // can give us a Batch logon
+                NativeHelpers.SECURITY_LOGON_TYPE tokenLogonType = GetTokenLogonType(hToken);
+                if (tokenLogonType == NativeHelpers.SECURITY_LOGON_TYPE.Network)
+                    continue;
 
-            for (uint i = 0; i < num_processes; i++)
-            {
-                IntPtr hProcess = OpenProcess(ProcessAccessFlags.PROCESS_QUERY_INFORMATION, false, pids[i]);
-                if (hProcess != IntPtr.Zero)
+                // Check that the required privileges are on the token
+                if (requiredPrivileges != null)
                 {
-                    IntPtr hToken = IntPtr.Zero;
-                    // According to CreateProcessWithTokenW we require a token with
-                    //  TOKEN_QUERY, TOKEN_DUPLICATE and TOKEN_ASSIGN_PRIMARY
-                    // Also add in TOKEN_IMPERSONATE so we can get an impersontated token
-                    TokenAccessLevels desired_access = TokenAccessLevels.Query |
-                        TokenAccessLevels.Duplicate |
-                        TokenAccessLevels.AssignPrimary |
-                        TokenAccessLevels.Impersonate;
-
-                    if (OpenProcessToken(hProcess, desired_access, out hToken))
-                    {
-                        string sid = GetTokenUserSID(hToken);
-                        if (sid == "S-1-5-18")
-                        {
-                            CloseHandle(hProcess);
-                            return hToken;
-                        }
-                    }
-
-                    CloseHandle(hToken);
+                    List<string> actualPrivileges = TokenUtil.GetTokenPrivileges(hToken).Select(x => x.Name).ToList();
+                    int missing = requiredPrivileges.Where(x => !actualPrivileges.Contains(x)).Count();
+                    if (missing > 0)
+                        continue;
                 }
-                CloseHandle(hProcess);
+
+                // Duplicate the token to convert it to a primary token with the access level required.
+                try
+                {
+                    return TokenUtil.DuplicateToken(hToken, TokenAccessLevels.MaximumAllowed, SecurityImpersonationLevel.Anonymous,
+                        TokenType.Primary);
+                }
+                catch (Process.Win32Exception)
+                {
+                    continue;
+                }
             }
 
-            return IntPtr.Zero;
+            return null;
         }
 
-        private static string GetTokenUserSID(IntPtr hToken)
+        private static SafeNativeHandle GetS4UTokenForUser(SecurityIdentifier sid, LogonType logonType)
         {
-            uint token_length;
-            string sid;
+            NTAccount becomeAccount = (NTAccount)sid.Translate(typeof(NTAccount));
+            string[] userSplit = becomeAccount.Value.Split(new char[1] { '\\' }, 2);
+            string domainName = userSplit[0];
+            string username = userSplit[1];
+            bool domainUser = domainName.ToLowerInvariant() != Environment.MachineName.ToLowerInvariant();
 
-            if (!GetTokenInformation(hToken, TokenInformationClass.TokenUser, IntPtr.Zero, 0, out token_length))
+            NativeHelpers.LSA_STRING logonProcessName = "ansible";
+            SafeLsaHandle lsaHandle;
+            IntPtr securityMode;
+            UInt32 res = NativeMethods.LsaRegisterLogonProcess(logonProcessName, out lsaHandle, out securityMode);
+            if (res != 0)
+                throw new Process.Win32Exception((int)NativeMethods.LsaNtStatusToWinError(res), "LsaRegisterLogonProcess() failed");
+
+            using (lsaHandle)
             {
-                int last_err = Marshal.GetLastWin32Error();
-                if (last_err != 122) // ERROR_INSUFFICIENT_BUFFER
-                    throw new Win32Exception(last_err, "Failed to get TokenUser length");
-            }
+                NativeHelpers.LSA_STRING packageName = domainUser ? "Kerberos" : "MICROSOFT_AUTHENTICATION_PACKAGE_V1_0";
+                UInt32 authPackage;
+                res = NativeMethods.LsaLookupAuthenticationPackage(lsaHandle, packageName, out authPackage);
+                if (res != 0)
+                    throw new Process.Win32Exception((int)NativeMethods.LsaNtStatusToWinError(res),
+                        String.Format("LsaLookupAuthenticationPackage({0}) failed", (string)packageName));
 
-            IntPtr token_information = Marshal.AllocHGlobal((int)token_length);
-            try
-            {
-                if (!GetTokenInformation(hToken, TokenInformationClass.TokenUser, token_information, token_length, out token_length))
-                    throw new Win32Exception("Failed to get TokenUser information");
+                int usernameLength = username.Length * sizeof(char);
+                int domainLength = domainName.Length * sizeof(char);
+                int authInfoLength = (Marshal.SizeOf(typeof(NativeHelpers.KERB_S4U_LOGON)) + usernameLength + domainLength);
+                IntPtr authInfo = Marshal.AllocHGlobal((int)authInfoLength);
+                try
+                {
+                    IntPtr usernamePtr = IntPtr.Add(authInfo, Marshal.SizeOf(typeof(NativeHelpers.KERB_S4U_LOGON)));
+                    IntPtr domainPtr = IntPtr.Add(usernamePtr, usernameLength);
 
-                TOKEN_USER token_user = (TOKEN_USER)Marshal.PtrToStructure(token_information, typeof(TOKEN_USER));
+                    // KERB_S4U_LOGON has the same structure as MSV1_0_S4U_LOGON (local accounts)
+                    NativeHelpers.KERB_S4U_LOGON s4uLogon = new NativeHelpers.KERB_S4U_LOGON
+                    {
+                        MessageType = 12,  // KerbS4ULogon
+                        Flags = 0,
+                        ClientUpn = new NativeHelpers.LSA_UNICODE_STRING
+                        {
+                            Length = (UInt16)usernameLength,
+                            MaximumLength = (UInt16)usernameLength,
+                            Buffer = usernamePtr,
+                        },
+                        ClientRealm = new NativeHelpers.LSA_UNICODE_STRING
+                        {
+                            Length = (UInt16)domainLength,
+                            MaximumLength = (UInt16)domainLength,
+                            Buffer = domainPtr,
+                        },
+                    };
+                    Marshal.StructureToPtr(s4uLogon, authInfo, false);
+                    Marshal.Copy(username.ToCharArray(), 0, usernamePtr, username.Length);
+                    Marshal.Copy(domainName.ToCharArray(), 0, domainPtr, domainName.Length);
 
-                if (!ConvertSidToStringSidW(token_user.User.Sid, out sid))
-                    throw new Win32Exception("Failed to get user SID");
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(token_information);
-            }
+                    Luid sourceLuid;
+                    if (!NativeMethods.AllocateLocallyUniqueId(out sourceLuid))
+                        throw new Process.Win32Exception("AllocateLocallyUniqueId() failed");
 
-            return sid;
-        }
+                    NativeHelpers.TOKEN_SOURCE tokenSource = new NativeHelpers.TOKEN_SOURCE
+                    {
+                        SourceName = "ansible\0".ToCharArray(),
+                        SourceIdentifier = sourceLuid,
+                    };
 
-        private static void GetProcessOutput(StreamReader stdoutStream, StreamReader stderrStream, out string stdout, out string stderr)
-        {
-            var sowait = new EventWaitHandle(false, EventResetMode.ManualReset);
-            var sewait = new EventWaitHandle(false, EventResetMode.ManualReset);
-            string so = null, se = null;
-            ThreadPool.QueueUserWorkItem((s) =>
-            {
-                so = stdoutStream.ReadToEnd();
-                sowait.Set();
-            });
-            ThreadPool.QueueUserWorkItem((s) =>
-            {
-                se = stderrStream.ReadToEnd();
-                sewait.Set();
-            });
-            foreach (var wh in new WaitHandle[] { sowait, sewait })
-                wh.WaitOne();
-            stdout = so;
-            stderr = se;
-        }
+                    // Only Batch or Network will work with S4U, prefer Batch but use Network if asked
+                    LogonType lsaLogonType = logonType == LogonType.Network
+                        ? LogonType.Network
+                        : LogonType.Batch;
+                    SafeLsaMemoryBuffer profileBuffer;
+                    UInt32 profileBufferLength;
+                    Luid logonId;
+                    SafeNativeHandle hToken;
+                    IntPtr quotas;
+                    UInt32 subStatus;
 
-        private static uint GetProcessExitCode(IntPtr processHandle)
-        {
-            new NativeWaitHandle(processHandle).WaitOne();
-            uint exitCode;
-            if (!GetExitCodeProcess(processHandle, out exitCode))
-                throw new Win32Exception("Error getting process exit code");
-            return exitCode;
-        }
+                    res = NativeMethods.LsaLogonUser(lsaHandle, logonProcessName, lsaLogonType, authPackage,
+                        authInfo, (UInt32)authInfoLength, IntPtr.Zero, tokenSource, out profileBuffer, out profileBufferLength,
+                        out logonId, out hToken, out quotas, out subStatus);
+                    if (res != 0)
+                        throw new Process.Win32Exception((int)NativeMethods.LsaNtStatusToWinError(res),
+                            String.Format("LsaLogonUser() failed with substatus {0}", subStatus));
 
-        private static IntPtr GetElevatedToken(IntPtr hToken)
-        {
-            uint requestedLength;
-
-            IntPtr pTokenInfo = Marshal.AllocHGlobal(sizeof(int));
-
-            try
-            {
-                if (!GetTokenInformation(hToken, TokenInformationClass.TokenElevationType, pTokenInfo, sizeof(int), out requestedLength))
-                    throw new Win32Exception("Unable to get TokenElevationType");
-
-                var tet = (TokenElevationType)Marshal.ReadInt32(pTokenInfo);
-
-                // we already have the best token we can get, just use it
-                if (tet != TokenElevationType.TokenElevationTypeLimited)
+                    profileBuffer.Dispose();
                     return hToken;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(authInfo);
+                }
+            }
+        }
 
-                GetTokenInformation(hToken, TokenInformationClass.TokenLinkedToken, IntPtr.Zero, 0, out requestedLength);
+        private static SafeNativeHandle GetElevatedToken(SafeNativeHandle hToken)
+        {
+            TokenElevationType tet = TokenUtil.GetTokenElevationType(hToken);
+            // We already have the best token we can get, no linked token is really available.
+            if (tet != TokenElevationType.Limited)
+                return null;
 
-                IntPtr pLinkedToken = Marshal.AllocHGlobal((int)requestedLength);
+            SafeNativeHandle linkedToken = TokenUtil.GetTokenLinkedToken(hToken);
+            TokenStatistics tokenStats = TokenUtil.GetTokenStatistics(linkedToken);
 
-                if (!GetTokenInformation(hToken, TokenInformationClass.TokenLinkedToken, pLinkedToken, requestedLength, out requestedLength))
-                    throw new Win32Exception("Unable to get linked token");
-
-                IntPtr linkedToken = Marshal.ReadIntPtr(pLinkedToken);
-
-                Marshal.FreeHGlobal(pLinkedToken);
-
+            // We can only use a token if it's a primary one (we had the SeTcbPrivilege set)
+            if (tokenStats.TokenType == TokenType.Primary)
                 return linkedToken;
-            }
-            finally
+            else
+                return null;
+        }
+
+        private static NativeHelpers.SECURITY_LOGON_TYPE GetTokenLogonType(SafeNativeHandle hToken)
+        {
+            TokenStatistics stats = TokenUtil.GetTokenStatistics(hToken);
+
+            SafeLsaMemoryBuffer sessionDataPtr;
+            UInt32 res = NativeMethods.LsaGetLogonSessionData(ref stats.AuthenticationId, out sessionDataPtr);
+            if (res != 0)
+                // Default to Network, if we weren't able to get the actual type treat it as an error and assume
+                // we don't want to run a process with the token
+                return NativeHelpers.SECURITY_LOGON_TYPE.Network;
+
+            using (sessionDataPtr)
             {
-                Marshal.FreeHGlobal(pTokenInfo);
+                NativeHelpers.SECURITY_LOGON_SESSION_DATA sessionData = (NativeHelpers.SECURITY_LOGON_SESSION_DATA)Marshal.PtrToStructure(
+                    sessionDataPtr.DangerousGetHandle(), typeof(NativeHelpers.SECURITY_LOGON_SESSION_DATA));
+                return sessionData.LogonType;
             }
         }
 
-        private static void GrantAccessToWindowStationAndDesktop(SecurityIdentifier account)
+        private static void GrantAccessToWindowStationAndDesktop(IdentityReference account)
         {
-            const int WindowStationAllAccess = 0x000f037f;
-            GrantAccess(account, GetProcessWindowStation(), WindowStationAllAccess);
-            const int DesktopRightsAllAccess = 0x000f01ff;
-            GrantAccess(account, GetThreadDesktop(GetCurrentThreadId()), DesktopRightsAllAccess);
+            GrantAccess(account, NativeMethods.GetProcessWindowStation(), WINDOWS_STATION_ALL_ACCESS);
+            GrantAccess(account, NativeMethods.GetThreadDesktop(NativeMethods.GetCurrentThreadId()), DESKTOP_RIGHTS_ALL_ACCESS);
         }
 
-        private static void GrantAccess(SecurityIdentifier account, IntPtr handle, int accessMask)
+        private static void GrantAccess(IdentityReference account, NoopSafeHandle handle, int accessMask)
         {
-            SafeHandle safeHandle = new NoopSafeHandle(handle);
-            GenericSecurity security =
-                new GenericSecurity(false, ResourceType.WindowObject, safeHandle, AccessControlSections.Access);
-            security.AddAccessRule(
-                new GenericAccessRule(account, accessMask, AccessControlType.Allow));
-            security.Persist(safeHandle, AccessControlSections.Access);
+            GenericSecurity security = new GenericSecurity(false, ResourceType.WindowObject, handle, AccessControlSections.Access);
+            security.AddAccessRule(new GenericAccessRule(account, accessMask, AccessControlType.Allow));
+            security.Persist(handle, AccessControlSections.Access);
         }
 
         private class GenericSecurity : NativeObjectSecurity
@@ -702,13 +624,6 @@ namespace Ansible.Become
                 InheritanceFlags inheritanceFlags, PropagationFlags propagationFlags, AuditFlags flags)
             { throw new NotImplementedException(); }
             public override Type AuditRuleType { get { return typeof(AuditRule); } }
-        }
-
-        private class NoopSafeHandle : SafeHandle
-        {
-            public NoopSafeHandle(IntPtr handle) : base(handle, false) { }
-            public override bool IsInvalid { get { return false; } }
-            protected override bool ReleaseHandle() { return true; }
         }
 
         private class GenericAccessRule : AccessRule

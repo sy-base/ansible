@@ -28,13 +28,10 @@ from ansible.errors import AnsibleError, AnsibleFileNotFound
 from ansible.module_utils.six import text_type, binary_type
 from ansible.module_utils._text import to_bytes, to_native, to_text
 from ansible.plugins.connection import ConnectionBase
+from ansible.utils.display import Display
+from ansible.utils.path import unfrackpath
 
-
-try:
-    from __main__ import display
-except ImportError:
-    from ansible.utils.display import Display
-    display = Display()
+display = Display()
 
 
 class Connection(ConnectionBase):
@@ -42,6 +39,11 @@ class Connection(ConnectionBase):
 
     transport = 'local'
     has_pipelining = True
+
+    def __init__(self, *args, **kwargs):
+
+        super(Connection, self).__init__(*args, **kwargs)
+        self.cwd = None
 
     def _connect(self):
         ''' connect to the local host; nothing to do here '''
@@ -80,14 +82,15 @@ class Connection(ConnectionBase):
         p = subprocess.Popen(
             cmd,
             shell=isinstance(cmd, (text_type, binary_type)),
-            executable=executable,  # cwd=...
+            executable=executable,
+            cwd=self.cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         display.debug("done running command with Popen()")
 
-        if self._play_context.prompt and sudoable:
+        if self.become and self.become.expect_prompt() and sudoable:
             fcntl.fcntl(p.stdout, fcntl.F_SETFL, fcntl.fcntl(p.stdout, fcntl.F_GETFL) | os.O_NONBLOCK)
             fcntl.fcntl(p.stderr, fcntl.F_SETFL, fcntl.fcntl(p.stderr, fcntl.F_GETFL) | os.O_NONBLOCK)
             selector = selectors.DefaultSelector()
@@ -96,7 +99,7 @@ class Connection(ConnectionBase):
 
             become_output = b''
             try:
-                while not self.check_become_success(become_output) and not self.check_password_prompt(become_output):
+                while not self.become.check_success(become_output) and not self.become.check_password_prompt(become_output):
                     events = selector.select(self._play_context.timeout)
                     if not events:
                         stdout, stderr = p.communicate()
@@ -115,8 +118,9 @@ class Connection(ConnectionBase):
             finally:
                 selector.close()
 
-            if not self.check_become_success(become_output):
-                p.stdin.write(to_bytes(self._play_context.become_pass, errors='surrogate_or_strict') + b'\n')
+            if not self.become.check_success(become_output):
+                become_pass = self.become.get_option('become_pass', playcontext=self._play_context)
+                p.stdin.write(to_bytes(become_pass, errors='surrogate_or_strict') + b'\n')
             fcntl.fcntl(p.stdout, fcntl.F_SETFL, fcntl.fcntl(p.stdout, fcntl.F_GETFL) & ~os.O_NONBLOCK)
             fcntl.fcntl(p.stderr, fcntl.F_SETFL, fcntl.fcntl(p.stderr, fcntl.F_GETFL) & ~os.O_NONBLOCK)
 
@@ -131,6 +135,9 @@ class Connection(ConnectionBase):
         ''' transfer a file from local to local '''
 
         super(Connection, self).put_file(in_path, out_path)
+
+        in_path = unfrackpath(in_path, basedir=self.cwd)
+        out_path = unfrackpath(out_path, basedir=self.cwd)
 
         display.vvv(u"PUT {0} TO {1}".format(in_path, out_path), host=self._play_context.remote_addr)
         if not os.path.exists(to_bytes(in_path, errors='surrogate_or_strict')):

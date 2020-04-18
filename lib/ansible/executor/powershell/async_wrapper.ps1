@@ -39,8 +39,9 @@ $Payload.async_results_path = $results_path
 $Payload.actions = $Payload.actions[1..99]
 $payload_json = ConvertTo-Json -InputObject $Payload -Depth 99 -Compress
 
+#
 $exec_wrapper = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Payload.exec_wrapper))
-$exec_wrapper = $exec_wrapper.Replace("`$json_raw = ''", "`$json_raw = @'`r`n$payload_json`r`n'@")
+$exec_wrapper += "`0`0`0`0" + $payload_json
 $payload_bytes = [System.Text.Encoding]::UTF8.GetBytes($exec_wrapper)
 $pipe_name = "ansible-async-$jid-$([guid]::NewGuid())"
 
@@ -77,7 +78,9 @@ $bootstrap_wrapper = {
         $pipe.Close()
     }
     $exec = [System.Text.Encoding]::UTF8.GetString($input_bytes)
-    $exec = [ScriptBlock]::Create($exec)
+    $exec_parts = $exec.Split(@("`0`0`0`0"), 2, [StringSplitOptions]::RemoveEmptyEntries)
+    Set-Variable -Name json_raw -Value $exec_parts[1]
+    $exec = [ScriptBlock]::Create($exec_parts[0])
     &$exec
 }
 
@@ -142,11 +145,16 @@ try {
     $result_json = ConvertTo-Json -InputObject $result -Depth 99 -Compress
     Set-Content $results_path -Value $result_json
 
-    Write-AnsibleLog "INFO - waiting for async process to connect to named pipe for 5 seconds" "async_wrapper"
+    $np_timeout = $Payload.async_startup_timeout * 1000
+    Write-AnsibleLog "INFO - waiting for async process to connect to named pipe for $np_timeout milliseconds" "async_wrapper"
     $wait_async = $pipe.BeginWaitForConnection($null, $null)
-    $wait_async.AsyncWaitHandle.WaitOne(5000) > $null
+    $wait_async.AsyncWaitHandle.WaitOne($np_timeout) > $null
     if (-not $wait_async.IsCompleted) {
-        throw "timeout while waiting for child process to connect to named pipe"
+        $msg = "Ansible encountered a timeout while waiting for the async task to start and connect to the named"
+        $msg += "pipe. This can be affected by the performance of the target - you can increase this timeout using"
+        $msg += "WIN_ASYNC_STARTUP_TIMEOUT or just for this host using the win_async_startup_timeout hostvar if "
+        $msg += "this keeps happening."
+        throw $msg
     }
     $pipe.EndWaitForConnection($wait_async)
 

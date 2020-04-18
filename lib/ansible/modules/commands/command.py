@@ -20,31 +20,43 @@ short_description: Execute commands on targets
 version_added: historical
 description:
      - The C(command) module takes the command name followed by a list of space-delimited arguments.
-     - The given command will be executed on all selected nodes. It will not be
+     - The given command will be executed on all selected nodes.
+     - The command(s) will not be
        processed through the shell, so variables like C($HOME) and operations
-       like C("<"), C(">"), C("|"), C(";") and C("&") will not work (use the M(shell)
-       module if you need these features).
+       like C("*"), C("<"), C(">"), C("|"), C(";") and C("&") will not work.
+       Use the M(shell) module if you need these features.
+     - To create C(command) tasks that are easier to read than the ones using space-delimited
+       arguments, pass parameters using the C(args) L(task keyword,../reference_appendices/playbooks_keywords.html#task)
+       or use C(cmd) parameter.
+     - Either a free form command or C(cmd) parameter is required, see the examples.
      - For Windows targets, use the M(win_command) module instead.
 options:
   free_form:
     description:
-      - The command module takes a free form command to run.
+      - The command module takes a free form string as a command to run.
       - There is no actual parameter named 'free form'.
-      - See the examples on how to use this module.
-    required: yes
-  argv:
+  cmd:
+    type: str
     description:
-      - Allows the user to provide the command as a list vs. a string.  Only the string or the list form can be
-        provided, not both.  One or the other must be provided.
+      - The command to run.
+  argv:
+    type: list
+    description:
+      - Passes the command as a list rather than a string.
+      - Use C(argv) to avoid quoting values that would otherwise be interpreted incorrectly (for example "user name").
+      - Only the string (free form) or the list (argv) form can be provided, not both.  One or the other must be provided.
     version_added: "2.6"
   creates:
+    type: path
     description:
       - A filename or (since 2.0) glob pattern. If it already exists, this step B(won't) be run.
   removes:
+    type: path
     description:
       - A filename or (since 2.0) glob pattern. If it already exists, this step B(will) be run.
     version_added: "0.8"
   chdir:
+    type: path
     description:
       - Change into this directory before running the command.
     version_added: "0.6"
@@ -58,6 +70,18 @@ options:
     description:
       - Set the stdin of the command directly to the specified value.
     version_added: "2.4"
+  stdin_add_newline:
+    type: bool
+    default: yes
+    description:
+      - If set to C(yes), append a newline to stdin data.
+    version_added: "2.8"
+  strip_empty_ends:
+    description:
+      - Strip empty lines from the end of stdout/stderr in result.
+    version_added: "2.8"
+    type: bool
+    default: yes
 notes:
     -  If you want to run a command through the shell (say you are using C(<), C(>), C(|), etc), you actually want the M(shell) module instead.
        Parsing shell metacharacters can lead to unexpected commands being executed if quoting is not done correctly so it is more secure to
@@ -68,6 +92,12 @@ notes:
        check for the existence of the file and report the correct changed status. If these are not supplied, the task will be skipped.
     -  The C(executable) parameter is removed since version 2.4. If you have a need for this parameter, use the M(shell) module instead.
     -  For Windows targets, use the M(win_command) module instead.
+    -  For rebooting systems, use the M(reboot) or M(win_reboot) module.
+seealso:
+- module: raw
+- module: script
+- module: shell
+- module: win_command
 author:
     - Ansible Core Team
     - Michael DeHaan
@@ -78,24 +108,40 @@ EXAMPLES = r'''
   command: cat /etc/motd
   register: mymotd
 
-- name: Run the command if the specified file does not exist.
-  command: /usr/bin/make_database.sh arg1 arg2
+# free-form (string) arguments, all arguments on one line
+- name: Run command if /path/to/database does not exist (without 'args').
+  command: /usr/bin/make_database.sh db_user db_name creates=/path/to/database
+
+# free-form (string) arguments, some arguments on separate lines with the 'args' keyword
+# 'args' is a task keyword, passed at the same level as the module
+- name: Run command if /path/to/database does not exist (with 'args' keyword).
+  command: /usr/bin/make_database.sh db_user db_name
   args:
     creates: /path/to/database
 
-# You can also use the 'args' form to provide the options.
-- name: This command will change the working directory to somedir/ and will only run when /path/to/database doesn't exist.
-  command: /usr/bin/make_database.sh arg1 arg2
+# 'cmd' is module parameter
+- name: Run command if /path/to/database does not exist (with 'cmd' parameter).
+  command:
+    cmd: /usr/bin/make_database.sh db_user db_name
+    creates: /path/to/database
+
+- name: Change the working directory to somedir/ and run the command as db_owner if /path/to/database does not exist.
+  command: /usr/bin/make_database.sh db_user db_name
+  become: yes
+  become_user: db_owner
   args:
     chdir: somedir/
     creates: /path/to/database
 
-- name: use argv to send the command as a list.  Be sure to leave command empty
+# argv (list) arguments, each argument on a separate line, 'args' keyword not necessary
+# 'argv' is a parameter, indented one level from the module
+- name: Use 'argv' to send a command as a list - leave 'command' empty
   command:
-  args:
     argv:
-      - echo
-      - testing
+      - /usr/bin/make_database.sh
+      - Username with whitespace
+      - dbname with whitespace
+    creates: /path/to/database
 
 - name: safely use templated variable to run command. Always use the quote filter to avoid injection issues.
   command: cat {{ myfile|quote }}
@@ -103,28 +149,58 @@ EXAMPLES = r'''
 '''
 
 RETURN = r'''
+msg:
+  description: changed
+  returned: always
+  type: bool
+  sample: True
+start:
+  description: The command execution start time
+  returned: always
+  type: str
+  sample: '2017-09-29 22:03:48.083128'
+end:
+  description: The command execution end time
+  returned: always
+  type: str
+  sample: '2017-09-29 22:03:48.084657'
+delta:
+  description: The command execution delta time
+  returned: always
+  type: str
+  sample: '0:00:00.001529'
+stdout:
+  description: The command standard output
+  returned: always
+  type: str
+  sample: 'Clustering node rabbit@slave1 with rabbit@master …'
+stderr:
+  description: The command standard error
+  returned: always
+  type: str
+  sample: 'ls cannot access foo: No such file or directory'
 cmd:
-  description: the cmd that was run on the remote machine
+  description: The command executed by the task
   returned: always
   type: list
   sample:
   - echo
   - hello
-delta:
-  description: cmd end time - cmd start time
+rc:
+  description: The command return code (0 means success)
   returned: always
-  type: string
-  sample: 0:00:00.001529
-end:
-  description: cmd end time
+  type: int
+  sample: 0
+stdout_lines:
+  description: The command standard output split in lines
   returned: always
-  type: string
-  sample: '2017-09-29 22:03:48.084657'
-start:
-  description: cmd start time
+  type: list
+  sample: [u'Clustering node rabbit@slave1 with rabbit@master …']
+stderr_lines:
+  description: The command standard error split in lines
   returned: always
-  type: string
-  sample: '2017-09-29 22:03:48.083128'
+  type: list
+  sample: [u'ls cannot access foo: No such file or directory', u'ls …']
 '''
 
 import datetime
@@ -133,7 +209,7 @@ import os
 import shlex
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils._text import to_native
+from ansible.module_utils._text import to_native, to_bytes, to_text
 from ansible.module_utils.common.collections import is_iterable
 
 
@@ -154,18 +230,18 @@ def check_command(module, commandline):
     command = os.path.basename(command)
 
     disable_suffix = "If you need to use command because {mod} is insufficient you can add" \
-                     " warn=False to this command task or set command_warnings=False in" \
+                     " 'warn: false' to this command task or set 'command_warnings=False' in" \
                      " ansible.cfg to get rid of this message."
     substitutions = {'mod': None, 'cmd': command}
 
     if command in arguments:
-        msg = "Consider using the {mod} module with {subcmd} rather than running {cmd}.  " + disable_suffix
+        msg = "Consider using the {mod} module with {subcmd} rather than running '{cmd}'.  " + disable_suffix
         substitutions['mod'] = 'file'
         substitutions['subcmd'] = arguments[command]
         module.warn(msg.format(**substitutions))
 
     if command in commands:
-        msg = "Consider using the {mod} module rather than running {cmd}.  " + disable_suffix
+        msg = "Consider using the {mod} module rather than running '{cmd}'.  " + disable_suffix
         substitutions['mod'] = commands[command]
         module.warn(msg.format(**substitutions))
 
@@ -189,6 +265,8 @@ def main():
             # The default for this really comes from the action plugin
             warn=dict(type='bool', default=True),
             stdin=dict(required=False),
+            stdin_add_newline=dict(type='bool', default=True),
+            strip_empty_ends=dict(type='bool', default=True),
         ),
         supports_check_mode=True,
     )
@@ -201,6 +279,8 @@ def main():
     removes = module.params['removes']
     warn = module.params['warn']
     stdin = module.params['stdin']
+    stdin_add_newline = module.params['stdin_add_newline']
+    strip = module.params['strip_empty_ends']
 
     if not shell and executable:
         module.warn("As of Ansible 2.4, the parameter 'executable' is no longer supported with the 'command' module. Not using '%s'." % executable)
@@ -222,8 +302,15 @@ def main():
         args = [to_native(arg, errors='surrogate_or_strict', nonstring='simplerepr') for arg in args]
 
     if chdir:
-        chdir = os.path.abspath(chdir)
-        os.chdir(chdir)
+        try:
+            chdir = to_bytes(os.path.abspath(chdir), errors='surrogate_or_strict')
+        except ValueError as e:
+            module.fail_json(msg='Unable to use supplied chdir: %s' % to_text(e))
+
+        try:
+            os.chdir(chdir)
+        except (IOError, OSError) as e:
+            module.fail_json(msg='Unable to change directory before execution: %s' % to_text(e))
 
     if creates:
         # do not run the command if the line contains creates=filename
@@ -255,7 +342,7 @@ def main():
     startd = datetime.datetime.now()
 
     if not module.check_mode:
-        rc, out, err = module.run_command(args, executable=executable, use_unsafe_shell=shell, encoding=None, data=stdin)
+        rc, out, err = module.run_command(args, executable=executable, use_unsafe_shell=shell, encoding=None, data=stdin, binary_data=(not stdin_add_newline))
     elif creates or removes:
         rc = 0
         out = err = b'Command would have run if not in check mode'
@@ -265,10 +352,14 @@ def main():
     endd = datetime.datetime.now()
     delta = endd - startd
 
+    if strip:
+        out = out.rstrip(b"\r\n")
+        err = err.rstrip(b"\r\n")
+
     result = dict(
         cmd=args,
-        stdout=out.rstrip(b"\r\n"),
-        stderr=err.rstrip(b"\r\n"),
+        stdout=out,
+        stderr=err,
         rc=rc,
         start=str(startd),
         end=str(endd),

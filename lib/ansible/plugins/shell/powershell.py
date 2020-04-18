@@ -5,59 +5,26 @@ from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
 DOCUMENTATION = '''
-    name: powershell
-    plugin_type: shell
-    version_added: ""
-    short_description: Windows Powershell
-    description:
-      - The only option when using 'winrm' as a connection plugin
-    options:
-      async_dir:
-        description:
-        - Directory in which ansible will keep async job information.
-        - Before Ansible 2.8, this was set to C(remote_tmp + "\\.ansible_async").
-        default: '%USERPROFILE%\\.ansible_async'
-        ini:
-        - section: powershell
-          key: async_dir
-        vars:
-        - name: ansible_async_dir
-        version_added: '2.8'
-      remote_tmp:
-        description:
-        - Temporary directory to use on targets when copying files to the host.
-        default: '%TEMP%'
-        ini:
-        - section: powershell
-          key: remote_tmp
-        vars:
-        - name: ansible_remote_tmp
-      set_module_language:
-        description:
-        - Controls if we set the locale for moduels when executing on the
-          target.
-        - Windows only supports C(no) as an option.
-        type: bool
-        default: 'no'
-        choices:
-        - 'no'
-      environment:
-        description:
-        - Dictionary of environment variables and their values to use when
-          executing commands.
-        type: dict
-        default: {}
+name: powershell
+plugin_type: shell
+version_added: historical
+short_description: Windows PowerShell
+description:
+- The only option when using 'winrm' or 'psrp' as a connection plugin.
+- Can also be used when using 'ssh' as a connection plugin and the C(DefaultShell) has been configured to PowerShell.
+extends_documentation_fragment:
+- shell_windows
 '''
-# FIXME: admin_users and set_module_language don't belong here but must be set
-# so they don't failk when someone get_option('admin_users') on this plugin
 
 import base64
 import os
 import re
 import shlex
+import pkgutil
+import xml.etree.ElementTree as ET
+import ntpath
 
-from ansible.errors import AnsibleError
-from ansible.module_utils._text import to_text
+from ansible.module_utils._text import to_bytes, to_text
 from ansible.plugins.shell import ShellBase
 
 
@@ -70,6 +37,21 @@ if _powershell_version:
     _common_args = ['PowerShell', '-Version', _powershell_version] + _common_args[1:]
 
 
+def _parse_clixml(data, stream="Error"):
+    """
+    Takes a byte string like '#< CLIXML\r\n<Objs...' and extracts the stream
+    message encoded in the XML data. CLIXML is used by PowerShell to encode
+    multiple objects in stderr.
+    """
+    clixml = ET.fromstring(data.split(b"\r\n", 1)[-1])
+    namespace_match = re.match(r'{(.*)}', clixml.tag)
+    namespace = "{%s}" % namespace_match.group(1) if namespace_match else ""
+
+    strings = clixml.findall("./%sS" % namespace)
+    lines = [e.text.replace('_x000D__x000A_', '') for e in strings if e.attrib.get('S') == stream]
+    return to_bytes('\r\n'.join(lines))
+
+
 class ShellModule(ShellBase):
 
     # Common shell filenames that this plugin handles
@@ -79,40 +61,26 @@ class ShellModule(ShellBase):
     # Family of shells this has.  Must match the filename without extension
     SHELL_FAMILY = 'powershell'
 
-    env = dict()
+    _SHELL_REDIRECT_ALLNULL = '> $null'
+    _SHELL_AND = ';'
 
-    # We're being overly cautious about which keys to accept (more so than
-    # the Windows environment is capable of doing), since the powershell
-    # env provider's limitations don't appear to be documented.
-    safe_envkey = re.compile(r'^[\d\w_]{1,255}$')
+    # Used by various parts of Ansible to do Windows specific changes
+    _IS_WINDOWS = True
 
     # TODO: add binary module support
-
-    def assert_safe_env_key(self, key):
-        if not self.safe_envkey.match(key):
-            raise AnsibleError("Invalid PowerShell environment key: %s" % key)
-        return key
-
-    def safe_env_value(self, key, value):
-        if len(value) > 32767:
-            raise AnsibleError("PowerShell environment value for key '%s' exceeds 32767 characters in length" % key)
-        # powershell single quoted literals need single-quote doubling as their only escaping
-        value = value.replace("'", "''")
-        return to_text(value, errors='surrogate_or_strict')
 
     def env_prefix(self, **kwargs):
         # powershell/winrm env handling is handled in the exec wrapper
         return ""
 
     def join_path(self, *args):
-        parts = []
-        for arg in args:
-            arg = self._unquote(arg).replace('/', '\\')
-            parts.extend([a for a in arg.split('\\') if a])
-        path = '\\'.join(parts)
-        if path.startswith('~'):
-            return path
-        return path
+        # use normpath() to remove doubled slashed and convert forward to backslashes
+        parts = [ntpath.normpath(self._unquote(arg)) for arg in args]
+
+        # Becuase ntpath.join treats any component that begins with a backslash as an absolute path,
+        # we have to strip slashes from at least the beginning, otherwise join will ignore all previous
+        # path components except for the drive.
+        return ntpath.join(parts[0], *[part.strip('\\') for part in parts[1:]])
 
     def get_remote_filename(self, pathname):
         # powershell requires that script files end with .ps1
@@ -147,6 +115,8 @@ class ShellModule(ShellBase):
     def mkdtemp(self, basefile=None, system=False, mode=None, tmpdir=None):
         # Windows does not have an equivalent for the system temp files, so
         # the param is ignored
+        if not basefile:
+            basefile = self.__class__._generate_temp_dir_name()
         basefile = self._escape(self._unquote(basefile))
         basetmpdir = tmpdir if tmpdir else self.get_option('remote_tmp')
 
@@ -208,9 +178,11 @@ class ShellModule(ShellBase):
         return self._encode_script(script)
 
     def build_module_command(self, env_string, shebang, cmd, arg_path=None):
+        bootstrap_wrapper = pkgutil.get_data("ansible.executor.powershell", "bootstrap_wrapper.ps1")
+
         # pipelining bypass
         if cmd == '':
-            return '-'
+            return self._encode_script(script=bootstrap_wrapper, strict_mode=False, preserve_rc=False)
 
         # non-pipelining
 
@@ -218,8 +190,10 @@ class ShellModule(ShellBase):
         cmd_parts = list(map(to_text, cmd_parts))
         if shebang and shebang.lower() == '#!powershell':
             if not self._unquote(cmd_parts[0]).lower().endswith('.ps1'):
+                # we're running a module via the bootstrap wrapper
                 cmd_parts[0] = '"%s.ps1"' % self._unquote(cmd_parts[0])
-            cmd_parts.insert(0, '&')
+            wrapper_cmd = "type " + cmd_parts[0] + " | " + self._encode_script(script=bootstrap_wrapper, strict_mode=False, preserve_rc=False)
+            return wrapper_cmd
         elif shebang and shebang.startswith('#!'):
             cmd_parts.insert(0, shebang[2:])
         elif not shebang:

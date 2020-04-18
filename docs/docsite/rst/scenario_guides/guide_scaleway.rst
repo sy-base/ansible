@@ -1,8 +1,8 @@
 .. _guide_scaleway:
 
-***************************
-Using Scaleway with Ansible
-***************************
+**************
+Scaleway Guide
+**************
 
 .. _scaleway_introduction:
 
@@ -68,8 +68,6 @@ The ``ssh_pub_key`` parameter contains your ssh public key as a string. Here is 
 
 .. code-block:: yaml
 
-    # SCW_API_KEY='XXX' ansible-playbook ./test/legacy/scaleway_ssh_playbook.yml
-
     - name: Test SSH key lifecycle on a Scaleway account
       hosts: localhost
       gather_facts: no
@@ -119,8 +117,6 @@ Here are the parameter details for the example shown above:
 Take a look at this short playbook to see a working example using ``scaleway_compute``:
 
 .. code-block:: yaml
-
-    # SCW_TOKEN='XXX' ansible-playbook ./test/legacy/scaleway_compute.yml
 
     - name: Test compute instance lifecycle on a Scaleway account
       hosts: localhost
@@ -193,9 +189,13 @@ Create a file named ``scaleway_inventory.yml`` with the following content:
 This inventory means that we want all hosts that got the tag ``web_server`` on the zones ``ams1`` and ``par1``.
 Once you have configured this file, you can get the information using the following command:
 
-::
+.. code-block:: bash
 
     $ ansible-inventory --list -i scaleway_inventory.yml
+
+The output will be:
+
+.. code-block:: yaml
 
     {
         "_meta": {
@@ -242,3 +242,52 @@ As you can see, we get different groups of hosts.
 
 In case a filter parameter is not defined, the plugin supposes all values possible are wanted.
 This means that for each tag that exists on your Scaleway compute nodes, a group based on each tag will be created.
+
+Scaleway S3 object storage
+==========================
+
+`Object Storage <https://www.scaleway.com/object-storage>`_ allows you to store any kind of objects (documents, images, videos, etc.).
+As the Scaleway API is S3 compatible, Ansible supports it natively through the modules: :ref:`s3_bucket_module`, :ref:`aws_s3_module`.
+
+You can find many examples in the `scaleway_s3 integration tests <https://github.com/ansible/ansible-legacy-tests/tree/devel/test/legacy/roles/scaleway_s3>`_.
+
+.. code-block:: yaml+jinja
+
+    - hosts: myserver
+      vars:
+        scaleway_region: nl-ams
+        s3_url: https://s3.nl-ams.scw.cloud
+      environment:
+        # AWS_ACCESS_KEY matches your scaleway organization id available at https://cloud.scaleway.com/#/account
+        AWS_ACCESS_KEY: 00000000-1111-2222-3333-444444444444
+        # AWS_SECRET_KEY matches a secret token that you can retrieve at https://cloud.scaleway.com/#/credentials
+        AWS_SECRET_KEY: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+      module_defaults:
+        group/aws:
+          s3_url: '{{ s3_url }}'
+          region: '{{ scaleway_region }}'
+      tasks:
+       # use a fact instead of a variable, otherwise template is evaluate each time variable is used
+        - set_fact:
+            bucket_name: "{{ 99999999 | random | to_uuid }}"
+
+        # "requester_pays:" is mandatory because Scaleway doesn't implement related API
+        # another way is to use aws_s3 and "mode: create" !
+        - s3_bucket:
+            name: '{{ bucket_name }}'
+            requester_pays:
+
+        - name: Another way to create the bucket
+          aws_s3:
+            bucket: '{{ bucket_name }}'
+            mode: create
+            encrypt: false
+          register: bucket_creation_check
+
+        - name: add something in the bucket
+          aws_s3:
+            mode: put
+            bucket: '{{ bucket_name }}'
+            src: /tmp/test.txt  #  needs to be created before
+            object: test.txt
+            encrypt: false  # server side encryption must be disabled

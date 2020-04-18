@@ -4,14 +4,14 @@
 Module Maintenance & Support
 ****************************
 
-..contents::
+.. contents::
   :depth: 2
   :local:
 
 Maintenance
 ===========
 
-To help identify maintainers and understand how the included modules are officially supported, each module now has associated metadata that provides additional clarity for maintenance and support.
+To clarify who maintains each included module, adding features and fixing bugs, each included module now has associated metadata that provides information about maintenance.
 
 Core
 ----
@@ -28,7 +28,7 @@ Network
 Certified
 ---------
 
-:ref:`Certified<certified_supported>` modules are maintained by Ansible Partners.
+`Certified <https://access.redhat.com/articles/3642632>`_ modules are maintained by Ansible Partners.
 
 Community
 ---------
@@ -42,21 +42,21 @@ If you believe you have found a bug in a module and are already running the late
 
 Should you have a question rather than a bug report, inquiries are welcome on the `ansible-project Google group <https://groups.google.com/forum/#%21forum/ansible-project>`_ or on Ansible's "#ansible" channel, located on irc.freenode.net.
 
-For development-oriented topics, use the `ansible-devel Google group <https://groups.google.com/forum/#%21forum/ansible-devel>`_ or Ansible's #ansible and #ansible-devel channels, located on irc.freenode.net. You should also read :doc:`Community Information & Contributing <../community/index>`, :doc:`Testing Ansible <../dev_guide/testing>`, and :doc:`Developing Modules <../dev_guide/developing_modules>`.
+For development-oriented topics, use the `ansible-devel Google group <https://groups.google.com/forum/#%21forum/ansible-devel>`_ or Ansible's #ansible and #ansible-devel channels, located on irc.freenode.net. You should also read the :ref:`Community Guide <ansible_community_guide>`, :ref:`Testing Ansible <developing_testing>`, and the :ref:`Developer Guide <developer_guide>`.
 
 The modules are hosted on GitHub in a subdirectory of the `Ansible <https://github.com/ansible/ansible/tree/devel/lib/ansible/modules>`_ repo.
 
-NOTE: If you have a Red Hat Ansible Engine product subscription, please follow the standard issue reporting process via the Red Hat Customer Portal.
+NOTE: If you have a Red Hat Ansible Automation product subscription, please follow the standard issue reporting process via the `Red Hat Customer Portal <https://access.redhat.com/>`_.
 
 Support
 =======
 
 For more information on how included Ansible modules are supported by Red Hat,
-please refer to the following `knowledgebase article <https://access.redhat.com/articles/3166901>`_ as well as other resources on the `Red Hat Customer Portal. <https://access.redhat.com/>`_
+please refer to the following `knowledge base article <https://access.redhat.com/articles/3166901>`_ as well as other resources on the `Red Hat Customer Portal. <https://access.redhat.com/>`_
 
 .. seealso::
 
-   :ref:`Modules by category<modules_by_category>`
+   :ref:`Module index<modules_by_category>`
        A complete list of all available modules.
    :ref:`intro_adhoc`
        Examples of using modules in /usr/bin/ansible

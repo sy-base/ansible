@@ -37,12 +37,9 @@ from ansible.utils.hashing import checksum
 
 
 # Supplement the FILE_COMMON_ARGUMENTS with arguments that are specific to file
-# FILE_COMMON_ARGUMENTS contains things that are not arguments of file so remove those as well
 REAL_FILE_ARGS = frozenset(FILE_COMMON_ARGUMENTS.keys()).union(
                           ('state', 'path', '_original_basename', 'recurse', 'force',
-                           '_diff_peek', 'src')).difference(
-                          ('content', 'decrypt', 'backup', 'remote_src', 'regexp', 'delimiter',
-                           'directory_mode', 'unsafe_writes'))
+                           '_diff_peek', 'src'))
 
 
 def _create_remote_file_args(module_args):
@@ -216,7 +213,10 @@ class ActionModule(ActionBase):
             if self._play_context.no_log:
                 result['invocation'] = "CENSORED: no_log is set"
             else:
-                result["invocation"] = self._task.args.copy()
+                # NOTE: Should be removed in the future. For now keep this broken
+                # behaviour, have a look in the PR 51582
+                result['invocation'] = self._task.args.copy()
+                result['invocation']['module_args'] = self._task.args.copy()
 
         if isinstance(result['invocation'], dict) and 'content' in result['invocation']:
             result['invocation']['content'] = 'CENSORED: content is a no_log parameter'
@@ -302,6 +302,10 @@ class ActionModule(ActionBase):
             self._remove_tempfile_if_content_defined(content, content_tempfile)
             self._loader.cleanup_tmp_file(source_full)
 
+            # FIXME: I don't think this is needed when PIPELINING=0 because the source is created
+            # world readable.  Access to the directory itself is controlled via fixup_perms2() as
+            # part of executing the module. Check that umask with scp/sftp/piped doesn't cause
+            # a problem before acting on this idea. (This idea would save a round-trip)
             # fix file permissions when the copy is done as a different user
             if remote_path:
                 self._fixup_perms2((self._connection._shell.tmpdir, remote_path))

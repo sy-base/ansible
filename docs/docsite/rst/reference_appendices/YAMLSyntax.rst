@@ -5,7 +5,7 @@ YAML Syntax
 ===========
 
 This page provides a basic overview of correct YAML syntax, which is how Ansible
-playbooks (our configuration management language) are expressed.  
+playbooks (our configuration management language) are expressed.
 
 We use YAML because it is easier for humans to read and write than other common
 data formats like XML or JSON.  Further, there are libraries available in most
@@ -18,7 +18,7 @@ is used in practice.
 YAML Basics
 -----------
 
-For Ansible, nearly every YAML file starts with a list.   
+For Ansible, nearly every YAML file starts with a list.
 Each item in the list is a list of key/value pairs, commonly
 called a "hash" or a "dictionary".  So, we need to know how
 to write lists and dictionaries in YAML.
@@ -30,32 +30,31 @@ All members of a list are lines beginning at the same indentation level starting
 
     ---
     # A list of tasty fruits
-    fruits:
-        - Apple
-        - Orange
-        - Strawberry
-        - Mango
+    - Apple
+    - Orange
+    - Strawberry
+    - Mango
     ...
 
 A dictionary is represented in a simple ``key: value`` form (the colon must be followed by a space)::
 
     # An employee record
     martin:
-        name: Martin D'vloper
-        job: Developer
-        skill: Elite
+      name: Martin D'vloper
+      job: Developer
+      skill: Elite
 
 More complicated data structures are possible, such as lists of dictionaries, dictionaries whose values are lists or a mix of both::
 
     # Employee records
-    -  martin:
+    - martin:
         name: Martin D'vloper
         job: Developer
         skills:
           - python
           - perl
           - pascal
-    -  tabitha:
+    - tabitha:
         name: Tabitha Bitumen
         job: Developer
         skills:
@@ -67,7 +66,7 @@ Dictionaries and lists can also be represented in an abbreviated form if you rea
 
     ---
     martin: {name: Martin D'vloper, job: Developer, skill: Elite}
-    fruits: ['Apple', 'Orange', 'Strawberry', 'Mango']
+    ['Apple', 'Orange', 'Strawberry', 'Mango']
 
 These are called "Flow collections".
 
@@ -80,6 +79,8 @@ Ansible doesn't really use these too much, but you can also specify a boolean va
     knows_oop: True
     likes_emacs: TRUE
     uses_cvs: false
+
+Use lowercase 'true' or 'false' for boolean values in dictionaries if you want to be compatible with default yamllint options.
 
 Values can span multiple lines using ``|`` or ``>``.  Spanning multiple lines using a "Literal Block Scalar" ``|`` will include the newlines and any trailing spaces.
 Using a "Folded Block Scalar" ``>`` will fold newlines to spaces; it's used to make what would otherwise be a very long line easier to read and edit.
@@ -118,18 +119,18 @@ This really has nothing to do with Ansible, but will give you a feel for the for
     skill: Elite
     employed: True
     foods:
-        - Apple
-        - Orange
-        - Strawberry
-        - Mango
+      - Apple
+      - Orange
+      - Strawberry
+      - Mango
     languages:
-        perl: Elite
-        python: Elite
-        pascal: Lame
+      perl: Elite
+      python: Elite
+      pascal: Lame
     education: |
-        4 GCSEs
-        3 A-Levels
-        BSc in the Internet of Things
+      4 GCSEs
+      3 A-Levels
+      BSc in the Internet of Things
 
 That's all you really need to know about YAML to start writing `Ansible` playbooks.
 
@@ -137,8 +138,8 @@ Gotchas
 -------
 
 While you can put just about anything into an unquoted scalar, there are some exceptions.
-A colon followed by a space (or newline) ``: `` is an indicator for a mapping.
-A space followed by the pound sign `` #`` starts a comment.
+A colon followed by a space (or newline) ``": "`` is an indicator for a mapping.
+A space followed by the pound sign ``" #"`` starts a comment.
 
 Because of this, the following is going to result in a YAML syntax error::
 
@@ -153,7 +154,7 @@ Because of this, the following is going to result in a YAML syntax error::
 You will want to quote hash values using colons followed by a space or the end of the line::
 
     foo: 'somebody said I should put a colon here: so I did'
-    
+
     windows_drive: 'c:'
 
 ...and then the colon will be preserved.
@@ -161,7 +162,7 @@ You will want to quote hash values using colons followed by a space or the end o
 Alternatively, you can use double quotes::
 
     foo: "somebody said I should put a colon here: so I did"
-    
+
     windows_drive: "c:"
 
 The difference between single quotes and double quotes is that in double quotes
@@ -171,7 +172,9 @@ you can use escapes::
 
 The list of allowed escapes can be found in the YAML Specification under "Escape Sequences" (YAML 1.1) or "Escape Characters" (YAML 1.2).
 
-The following is invalid YAML::
+The following is invalid YAML:
+
+.. code-block:: text
 
     foo: "an escaped \' single quote"
 
@@ -224,7 +227,7 @@ value::
        Learn what playbooks can do and how to write/run them.
    `YAMLLint <http://yamllint.com/>`_
        YAML Lint (online) helps you debug YAML syntax if you are having problems
-   `Github examples directory <https://github.com/ansible/ansible-examples>`_
+   `GitHub examples directory <https://github.com/ansible/ansible-examples>`_
        Complete playbook files from the github project source
    `Wikipedia YAML syntax reference <https://en.wikipedia.org/wiki/YAML>`_
        A good guide to YAML syntax
@@ -232,9 +235,8 @@ value::
        Questions? Help? Ideas?  Stop by the list on Google Groups
    `irc.freenode.net <http://irc.freenode.net>`_
        #ansible IRC chat channel and #yaml for YAML specific questions
-   `YAML 1.1 Specification <http://yaml.org/spec/1.1/>`_
+   `YAML 1.1 Specification <https://yaml.org/spec/1.1/>`_
        The Specification for YAML 1.1, which PyYAML and libyaml are currently
        implementing
-   `YAML 1.2 Specification <http://yaml.org/spec/1.2/spec.html>`_
+   `YAML 1.2 Specification <https://yaml.org/spec/1.2/spec.html>`_
        For completeness, YAML 1.2 is the successor of 1.1
-
